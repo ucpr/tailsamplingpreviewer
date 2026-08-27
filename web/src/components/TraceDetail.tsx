@@ -2,6 +2,8 @@ import { useEffect, useMemo, useState } from "react";
 import { getTrace } from "../api";
 import { useAppState } from "../state";
 import { formatDurationMs } from "../format";
+import { PolicyAssistant } from "./PolicyAssistant";
+import type { SelectedAttribute } from "../ai/types";
 import type { SpanSummary, TraceDetail as TraceDetailType } from "../types";
 
 interface Props {
@@ -39,10 +41,23 @@ export function TraceDetail({ traceId, onClose }: Props) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [selectedSpanId, setSelectedSpanId] = useState<string | null>(null);
+  const [selectedAttrKeys, setSelectedAttrKeys] = useState<Set<string>>(new Set());
 
   useEffect(() => {
     setSelectedSpanId(null);
   }, [traceId]);
+
+  useEffect(() => {
+    setSelectedAttrKeys(new Set());
+  }, [selectedSpanId]);
+
+  const toggleAttrSelection = (key: string) =>
+    setSelectedAttrKeys((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
 
   useEffect(() => {
     if (!traceId) {
@@ -88,6 +103,13 @@ export function TraceDetail({ traceId, onClose }: Props) {
   const attributeEntries = selectedSpan
     ? Object.entries(selectedSpan.attributes ?? {}).sort(([a], [b]) => a.localeCompare(b))
     : [];
+  const selectedAttributes: SelectedAttribute[] = attributeEntries
+    .filter(([key]) => selectedAttrKeys.has(key))
+    .map(([key, value]) => ({
+      key,
+      value: String(value),
+      source: key.startsWith("resource.") ? "resource" : "span",
+    }));
 
   return (
     <aside className="trace-detail">
@@ -177,12 +199,25 @@ export function TraceDetail({ traceId, onClose }: Props) {
               <dl className="attribute-list">
                 {attributeEntries.map(([key, value]) => (
                   <div className="attribute-list__row" key={key}>
+                    <input
+                      type="checkbox"
+                      checked={selectedAttrKeys.has(key)}
+                      onChange={() => toggleAttrSelection(key)}
+                      title="Use as context for the AI policy assistant"
+                    />
                     <dt className="mono">{key}</dt>
                     <dd className="mono">{String(value)}</dd>
                   </div>
                 ))}
               </dl>
             </div>
+          )}
+
+          {selectedSpan && (
+            <PolicyAssistant
+              selectedAttributes={selectedAttributes}
+              onRemoveAttribute={toggleAttrSelection}
+            />
           )}
         </>
       )}

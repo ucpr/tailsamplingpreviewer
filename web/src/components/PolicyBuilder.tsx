@@ -103,7 +103,7 @@ function PolicyEditor({ policy, onChange, onRemove }: PolicyEditorProps) {
 }
 
 export function PolicyBuilder() {
-  const { state, setPolicy } = useAppState();
+  const { state, setPolicy, clearPolicySuggestions } = useAppState();
   const [draft, setDraft] = useState<PolicyView | null>(null);
   const [dirty, setDirty] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -112,6 +112,16 @@ export function PolicyBuilder() {
   useEffect(() => {
     if (!dirty && state.policy) setDraft(state.policy);
   }, [state.policy, dirty]);
+
+  // Merge in policies proposed by the AI policy assistant (Trace Detail),
+  // then drain the queue so they're only applied once.
+  useEffect(() => {
+    const suggestions = state.pendingPolicySuggestions;
+    if (!suggestions || suggestions.length === 0) return;
+    setDraft((d) => (d ? { ...d, policies: [...d.policies, ...suggestions] } : d));
+    setDirty(true);
+    clearPolicySuggestions();
+  }, [state.pendingPolicySuggestions, clearPolicySuggestions]);
 
   if (!draft) {
     return (

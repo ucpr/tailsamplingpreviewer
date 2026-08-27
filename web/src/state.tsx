@@ -12,6 +12,7 @@ import { BrowserSocket, type WsStatus } from "./ws";
 import type {
   ClientCmd,
   CollectorSummary,
+  PolicyCfg,
   PolicyView,
   ServerMsg,
   SessionSummary,
@@ -27,6 +28,9 @@ interface AppState {
   policy: PolicyView | null;
   statistics: StatisticsView | null;
   notice: string | null;
+  // Policies proposed by the AI policy assistant (see ai/), queued for
+  // PolicyBuilder to merge into its draft — see queuePolicySuggestions.
+  pendingPolicySuggestions: PolicyCfg[] | null;
 }
 
 const initialState: AppState = {
@@ -37,6 +41,7 @@ const initialState: AppState = {
   policy: null,
   statistics: null,
   notice: null,
+  pendingPolicySuggestions: null,
 };
 
 type Action =
@@ -44,7 +49,9 @@ type Action =
   | { kind: "server-msg"; msg: ServerMsg }
   | { kind: "policy-set"; policy: PolicyView }
   | { kind: "session-set"; session: SessionSummary }
-  | { kind: "notice"; message: string | null };
+  | { kind: "notice"; message: string | null }
+  | { kind: "policy-suggest"; policies: PolicyCfg[] }
+  | { kind: "policy-suggest-clear" };
 
 function reducer(state: AppState, action: Action): AppState {
   switch (action.kind) {
@@ -56,6 +63,10 @@ function reducer(state: AppState, action: Action): AppState {
       return { ...state, session: action.session };
     case "notice":
       return { ...state, notice: action.message };
+    case "policy-suggest":
+      return { ...state, pendingPolicySuggestions: action.policies };
+    case "policy-suggest-clear":
+      return { ...state, pendingPolicySuggestions: null };
     case "server-msg":
       return applyServerMsg(state, action.msg);
     default:
@@ -135,6 +146,8 @@ interface AppContextValue {
   setPolicy: (policy: PolicyView) => void;
   setSession: (session: SessionSummary) => void;
   notify: (message: string | null) => void;
+  queuePolicySuggestions: (policies: PolicyCfg[]) => void;
+  clearPolicySuggestions: () => void;
 }
 
 const AppContext = createContext<AppContextValue | null>(null);
@@ -166,10 +179,15 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
     (message: string | null) => dispatch({ kind: "notice", message }),
     [],
   );
+  const queuePolicySuggestions = useCallback(
+    (policies: PolicyCfg[]) => dispatch({ kind: "policy-suggest", policies }),
+    [],
+  );
+  const clearPolicySuggestions = useCallback(() => dispatch({ kind: "policy-suggest-clear" }), []);
 
   const value = useMemo(
-    () => ({ state, sendCmd, setPolicy, setSession, notify }),
-    [state, sendCmd, setPolicy, setSession, notify],
+    () => ({ state, sendCmd, setPolicy, setSession, notify, queuePolicySuggestions, clearPolicySuggestions }),
+    [state, sendCmd, setPolicy, setSession, notify, queuePolicySuggestions, clearPolicySuggestions],
   );
 
   return <AppContext.Provider value={value}>{children}</AppContext.Provider>;

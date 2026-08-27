@@ -604,7 +604,8 @@
 
 .attribute-list__row {
   display: grid;
-  grid-template-columns: minmax(140px, 45%) 1fr;
+  grid-template-columns: auto minmax(140px, 45%) 1fr;
+  align-items: baseline;
   gap: 8px;
   padding: 4px 8px;
   font-size: 12px;
@@ -629,6 +630,51 @@
   color: var(--text-bright);
   overflow-wrap: anywhere;
   user-select: text;
+}
+
+/* Policy Assistant */
+
+.policy-assistant {
+  margin-top: 16px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+
+.policy-assistant__chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.policy-assistant__chip {
+  font-size: 11px;
+  font-family: var(--font-mono, monospace);
+  padding: 2px 6px;
+  border-radius: 4px;
+  border: 1px solid var(--border-strong);
+  background: var(--bg-inset);
+  color: var(--text-bright);
+  cursor: pointer;
+}
+
+.policy-assistant__input {
+  width: 100%;
+  box-sizing: border-box;
+  resize: vertical;
+  font: inherit;
+  padding: 6px 8px;
+  margin-bottom: 8px;
+}
+
+.policy-assistant__result {
+  margin-top: 10px;
+}
+
+.policy-assistant__suggestions {
+  margin: 4px 0 8px;
+  padding-left: 18px;
+  font-size: 12px;
 }
 
 /* Policy Builder */
