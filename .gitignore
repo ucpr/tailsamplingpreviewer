@@ -7,3 +7,6 @@ web/dist/
 
 # Go
 *.test
+
+# Claude Code local state
+.claude/

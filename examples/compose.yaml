@@ -1,0 +1,59 @@
+# End-to-end verification stack for spec.md's MVP:
+#
+#   loadgen --OTLP--> otelcol (otlpreceiver + tailpreviewexporter)
+#                         │
+#                         ├── debug exporter (stands in for a Production
+#                         │   backend, e.g. Datadog/Tempo)
+#                         └── WebSocket Shadow Traffic ──> tailpreview
+#
+# Usage (from the repository root):
+#
+#   docker compose -f examples/compose.yaml up --build
+#
+# Then open http://localhost:17778 to watch synthetic traces flow through
+# Live Tail and preview KEEP/DROP against the default Policy.
+
+services:
+  tailpreview:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+      target: tailpreview
+    command:
+      - --collector-endpoint=0.0.0.0:17777
+      - --ui-endpoint=0.0.0.0:17778
+    ports:
+      - "17777:17777" # Collector WebSocket endpoint
+      - "17778:17778" # Browser UI + REST/WS API
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:17778/healthz"]
+      interval: 2s
+      timeout: 2s
+      retries: 15
+      start_period: 2s
+
+  otelcol:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+      target: otelcol
+    command: ["/etc/otelcol/config.yaml"]
+    volumes:
+      - ./docker/otelcol-config.yaml:/etc/otelcol/config.yaml:ro
+    ports:
+      - "4317:4317" # OTLP gRPC (available if you want to send traces from the host too)
+      - "4318:4318" # OTLP HTTP
+    depends_on:
+      tailpreview:
+        condition: service_healthy
+
+  loadgen:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+      target: loadgen
+    environment:
+      OTLP_ENDPOINT: otelcol:4318
+      TRACE_INTERVAL: 400ms
+    depends_on:
+      - otelcol

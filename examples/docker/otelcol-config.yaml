@@ -1,0 +1,38 @@
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  memory_limiter:
+    check_interval: 1s
+    limit_mib: 512
+  batch:
+
+exporters:
+  debug:
+    verbosity: basic
+  tailpreview:
+    endpoint: ws://tailpreview:17777/v1/collector
+    collector_id: otel-gateway-01
+    queue:
+      enabled: true
+      size: 1000
+    reconnect:
+      enabled: true
+      interval: 2s
+
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, batch]
+      # In a real deployment this would also include the Production
+      # exporter (e.g. otlp/production pointed at Datadog/Tempo);
+      # `debug` stands in for it here so `docker compose logs otelcol`
+      # shows that Production delivery keeps working independently of
+      # the Preview pipeline (spec.md ss41 "Production First").
+      exporters: [debug, tailpreview]
