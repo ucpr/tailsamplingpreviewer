@@ -38,7 +38,10 @@ func buildTraces(traceID [16]byte, serviceName, statusCode string) ptrace.Traces
 
 func TestEndToEnd_IngestAndDecide(t *testing.T) {
 	logger := zap.NewNop()
-	srv := New(logger, Config{Version: "test"})
+	srv, err := New(logger, Config{Version: "test"})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

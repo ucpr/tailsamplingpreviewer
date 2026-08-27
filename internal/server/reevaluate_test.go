@@ -16,7 +16,7 @@ import (
 // the ring buffer, including traces that already reached a final KEEP/DROP
 // decision, and refresh aggregate statistics to match.
 func TestSetPolicy_ReevaluatesAlreadyDecidedTraces(t *testing.T) {
-	srv := New(zap.NewNop(), Config{
+	srv, err := New(zap.NewNop(), Config{
 		InitialPolicy: sampling.Config{
 			DecisionWait: sampling.Duration(time.Second),
 			Policies: []sampling.PolicyCfg{
@@ -24,6 +24,9 @@ func TestSetPolicy_ReevaluatesAlreadyDecidedTraces(t *testing.T) {
 			},
 		},
 	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
 
 	id := pcommon.TraceID{7}
 	now := time.Now()
@@ -51,12 +54,14 @@ func TestSetPolicy_ReevaluatesAlreadyDecidedTraces(t *testing.T) {
 	}
 
 	// Now widen the policy so the very same trace should flip to KEEP.
-	srv.SetPolicy(sampling.Config{
+	if err := srv.SetPolicy(sampling.Config{
 		DecisionWait: sampling.Duration(time.Second),
 		Policies: []sampling.PolicyCfg{
 			{Name: "fast-or-slow", Type: sampling.AlwaysSample},
 		},
-	})
+	}); err != nil {
+		t.Fatalf("SetPolicy: %v", err)
+	}
 
 	after, ok := srv.store.Get(id)
 	if !ok || after.State != itrace.StateDecided || after.Decision != itrace.DecisionKeep {

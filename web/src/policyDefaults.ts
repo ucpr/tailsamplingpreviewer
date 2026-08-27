@@ -7,6 +7,7 @@ import type {
   BooleanAttributeCfg,
   LatencyCfg,
   NumericAttributeCfg,
+  OTTLConditionCfg,
   PolicyType,
   ProbabilisticCfg,
   RateLimitingCfg,
@@ -26,6 +27,7 @@ export interface CommonFields {
   boolean_attribute?: BooleanAttributeCfg;
   span_count?: SpanCountCfg;
   trace_state?: TraceStateCfg;
+  ottl_condition?: OTTLConditionCfg;
 }
 
 export const EMPTY_COMMON_FIELDS: Required<CommonFields> = {
@@ -38,6 +40,7 @@ export const EMPTY_COMMON_FIELDS: Required<CommonFields> = {
   boolean_attribute: undefined as unknown as BooleanAttributeCfg,
   span_count: undefined as unknown as SpanCountCfg,
   trace_state: undefined as unknown as TraceStateCfg,
+  ottl_condition: undefined as unknown as OTTLConditionCfg,
 };
 
 export function commonDefaultsForType(type: PolicyType): CommonFields {
@@ -60,6 +63,8 @@ export function commonDefaultsForType(type: PolicyType): CommonFields {
       return { span_count: { min_spans: 1 } };
     case "trace_state":
       return { trace_state: { key: "", values: [] } };
+    case "ottl_condition":
+      return { ottl_condition: { error_mode: "ignore", span: [] } };
     default:
       return {};
   }
@@ -91,6 +96,7 @@ export const POLICY_TYPES: PolicyType[] = [
   "rate_limiting",
   "span_count",
   "trace_state",
+  "ottl_condition",
   "and",
 ];
 
@@ -101,6 +107,13 @@ export const SUB_POLICY_TYPES: Array<AndSubPolicyCfg["type"]> = POLICY_TYPES.fil
 export function splitList(text: string): string[] {
   return text
     .split(",")
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0);
+}
+
+export function splitLines(text: string): string[] {
+  return text
+    .split("\n")
     .map((s) => s.trim())
     .filter((s) => s.length > 0);
 }

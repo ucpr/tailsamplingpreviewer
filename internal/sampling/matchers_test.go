@@ -218,7 +218,7 @@ func TestEvaluator_SinglePolicyMatch(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			ev := NewEvaluator(Config{Policies: []PolicyCfg{tt.policy}})
+			ev := newEvaluatorT(t, Config{Policies: []PolicyCfg{tt.policy}})
 			res := ev.Evaluate(tt.trace, time.Now())
 			gotMatch := len(res.MatchedNames()) == 1
 
@@ -268,7 +268,7 @@ func TestEvaluator_RateLimiting(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			policy := PolicyCfg{Name: "p", Type: RateLimiting, RateLimiting: &RateLimitingCfg{SpansPerSecond: tt.spansPerSecond}}
-			ev := NewEvaluator(Config{Policies: []PolicyCfg{policy}})
+			ev := newEvaluatorT(t, Config{Policies: []PolicyCfg{policy}})
 			now := time.Now()
 
 			for i, n := range tt.callSpanCounts {

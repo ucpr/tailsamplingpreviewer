@@ -31,6 +31,8 @@ function summarizePolicy(policy: PolicyCfg): string {
       return `span count ≥ ${policy.span_count?.min_spans}`;
     case "trace_state":
       return `tracestate ${policy.trace_state?.key} in [${policy.trace_state?.values.join(", ")}]`;
+    case "ottl_condition":
+      return `OTTL: ${policy.ottl_condition?.span.join(" OR ")}`;
     case "and":
       return `ALL of ${policy.and?.and_sub_policy.length ?? 0} conditions`;
     default:

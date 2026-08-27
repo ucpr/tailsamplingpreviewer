@@ -9,6 +9,15 @@ import (
 	itrace "github.com/ucpr/tailsamplingpreviewer/internal/trace"
 )
 
+func newEvaluatorT(t *testing.T, cfg Config) *Evaluator {
+	t.Helper()
+	ev, err := NewEvaluator(cfg)
+	if err != nil {
+		t.Fatalf("NewEvaluator: %v", err)
+	}
+	return ev
+}
+
 func mkTrace(statusErr bool, durationMs int64, svc string) *itrace.Trace {
 	start := time.Unix(0, 0)
 	end := start.Add(time.Duration(durationMs) * time.Millisecond)
@@ -40,7 +49,7 @@ func TestEvaluate_StatusCodeAndLatencyOR(t *testing.T) {
 			{Name: "slow", Type: Latency, Latency: &LatencyCfg{ThresholdMs: 1000}},
 		},
 	}
-	ev := NewEvaluator(cfg)
+	ev := newEvaluatorT(t, cfg)
 
 	errTrace := mkTrace(true, 10, "payment")
 	res := ev.Evaluate(errTrace, time.Now())
@@ -79,7 +88,7 @@ func TestEvaluate_AndCombinator(t *testing.T) {
 			},
 		},
 	}
-	ev := NewEvaluator(cfg)
+	ev := newEvaluatorT(t, cfg)
 
 	matches := mkTrace(false, 600, "payment")
 	if res := ev.Evaluate(matches, time.Now()); res.Decision != itrace.DecisionKeep {

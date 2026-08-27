@@ -38,10 +38,14 @@ func main() {
 	}
 	defer logger.Sync() //nolint:errcheck
 
-	srv := server.New(logger, server.Config{
+	srv, err := server.New(logger, server.Config{
 		Version: version,
 		Store:   trace.StoreConfig{MaxTraces: *maxTraces, MaxAge: *maxAge, MaxMemory: uint64(*maxMemoryBytes)},
 	})
+	if err != nil {
+		logger.Error("tailpreview: server init failed", zap.Error(err))
+		os.Exit(1)
+	}
 
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()

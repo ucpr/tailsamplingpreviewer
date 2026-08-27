@@ -17,7 +17,11 @@ import (
 
 func newTestServer(t *testing.T) *Server {
 	t.Helper()
-	return New(zap.NewNop(), Config{Version: "test"})
+	srv, err := New(zap.NewNop(), Config{Version: "test"})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	return srv
 }
 
 func doRequest(srv *Server, method, path string, body string) *httptest.ResponseRecorder {

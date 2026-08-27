@@ -84,6 +84,16 @@ const COMMON_FIELD_PROPERTIES = {
     },
     required: ["key", "values"],
   },
+  // spanevent is deliberately omitted: the preview server rejects it (it
+  // doesn't retain span event data), so the model should never propose it.
+  ottl_condition: {
+    type: "object",
+    properties: {
+      error_mode: { type: "string", enum: ["ignore", "propagate", "silent"] },
+      span: { type: "array", items: { type: "string" } },
+    },
+    required: ["error_mode", "span"],
+  },
 } as const;
 
 // Sub-policies inside an "and" can be any policy type except "and" itself —

@@ -71,6 +71,7 @@ export type PolicyType =
   | "boolean_attribute"
   | "span_count"
   | "trace_state"
+  | "ottl_condition"
   | "and";
 
 export interface LatencyCfg {
@@ -121,6 +122,15 @@ export interface TraceStateCfg {
   values: string[];
 }
 
+// spanevent is accepted only for YAML round-tripping (a pasted real
+// Collector config may set it); the preview server rejects it at save
+// time since it doesn't retain span event data to evaluate it against.
+export interface OTTLConditionCfg {
+  error_mode: "ignore" | "propagate" | "silent";
+  span: string[];
+  spanevent?: string[];
+}
+
 export interface AndSubPolicyCfg {
   name: string;
   type: Exclude<PolicyType, "and">;
@@ -133,6 +143,7 @@ export interface AndSubPolicyCfg {
   boolean_attribute?: BooleanAttributeCfg;
   span_count?: SpanCountCfg;
   trace_state?: TraceStateCfg;
+  ottl_condition?: OTTLConditionCfg;
 }
 
 export interface AndCfg {
@@ -151,6 +162,7 @@ export interface PolicyCfg {
   boolean_attribute?: BooleanAttributeCfg;
   span_count?: SpanCountCfg;
   trace_state?: TraceStateCfg;
+  ottl_condition?: OTTLConditionCfg;
   and?: AndCfg;
 }
 

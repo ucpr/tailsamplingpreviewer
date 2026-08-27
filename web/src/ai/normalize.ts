@@ -7,6 +7,7 @@ import { POLICY_TYPES, SUB_POLICY_TYPES, commonDefaultsForType } from "../policy
 import type { AndSubPolicyCfg, PolicyCfg, PolicyType, StatusCode } from "../types";
 
 const STATUS_CODES: readonly StatusCode[] = ["OK", "ERROR", "UNSET"];
+const OTTL_ERROR_MODES = ["ignore", "propagate", "silent"] as const;
 
 function isPolicyType(v: unknown): v is PolicyType {
   return typeof v === "string" && (POLICY_TYPES as readonly string[]).includes(v);
@@ -111,6 +112,12 @@ function normalizeCommonFields(type: PolicyType | AndSubPolicyCfg["type"], raw: 
       };
     case "trace_state":
       return { trace_state: { key: str(r.key, defaults.trace_state!.key), values: strArray(r.values) } };
+    case "ottl_condition": {
+      const errorMode = OTTL_ERROR_MODES.includes(r.error_mode as (typeof OTTL_ERROR_MODES)[number])
+        ? (r.error_mode as (typeof OTTL_ERROR_MODES)[number])
+        : defaults.ottl_condition!.error_mode;
+      return { ottl_condition: { error_mode: errorMode, span: strArray(r.span) } };
+    }
     default:
       return {};
   }

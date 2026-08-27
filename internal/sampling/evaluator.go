@@ -1,10 +1,14 @@
 package sampling
 
 import (
+	"fmt"
 	"hash/fnv"
 	"regexp"
 	"sync"
 	"time"
+
+	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl"
+	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl/contexts/ottlspan"
 
 	"github.com/ucpr/tailsamplingpreviewer/internal/trace"
 )
@@ -19,6 +23,13 @@ type Evaluator struct {
 	mu          sync.Mutex
 	rateWindows map[string]*rateWindow
 	regexCache  map[string]*regexp.Regexp
+
+	// ottlConditions holds every ottl_condition policy's compiled
+	// expression, keyed by the pointer identity of its OTTLConditionCfg
+	// (stable for the lifetime of this Evaluator: cfg is never mutated
+	// after construction). Compiling once here, like regexCache does for
+	// string_attribute regexes, avoids re-parsing OTTL on every Evaluate.
+	ottlConditions map[*OTTLConditionCfg]*ottl.ConditionSequence[*ottlspan.TransformContext]
 }
 
 type rateWindow struct {
@@ -26,12 +37,41 @@ type rateWindow struct {
 	count  int64
 }
 
-func NewEvaluator(cfg Config) *Evaluator {
-	return &Evaluator{
-		cfg:         cfg,
-		rateWindows: make(map[string]*rateWindow),
-		regexCache:  make(map[string]*regexp.Regexp),
+// NewEvaluator compiles cfg's policies (including every ottl_condition's
+// OTTL expressions) and returns an error if any of them are invalid,
+// instead of failing later or panicking during Evaluate.
+func NewEvaluator(cfg Config) (*Evaluator, error) {
+	e := &Evaluator{
+		cfg:            cfg,
+		rateWindows:    make(map[string]*rateWindow),
+		regexCache:     make(map[string]*regexp.Regexp),
+		ottlConditions: make(map[*OTTLConditionCfg]*ottl.ConditionSequence[*ottlspan.TransformContext]),
 	}
+	for _, p := range cfg.Policies {
+		if err := e.compileOTTL(p.OTTLCondition); err != nil {
+			return nil, fmt.Errorf("policy %q: %w", p.Name, err)
+		}
+		if p.Type == And && p.And != nil {
+			for _, sub := range p.And.SubPolicies {
+				if err := e.compileOTTL(sub.OTTLCondition); err != nil {
+					return nil, fmt.Errorf("policy %q sub-policy %q: %w", p.Name, sub.Name, err)
+				}
+			}
+		}
+	}
+	return e, nil
+}
+
+func (e *Evaluator) compileOTTL(c *OTTLConditionCfg) error {
+	if c == nil {
+		return nil
+	}
+	seq, err := compileOTTLSpanCondition(c)
+	if err != nil {
+		return err
+	}
+	e.ottlConditions[c] = seq
+	return nil
 }
 
 func (e *Evaluator) Config() Config { return e.cfg }
@@ -75,6 +115,8 @@ func (e *Evaluator) matchPolicy(p PolicyCfg, t *trace.Trace, now time.Time) bool
 		return matchSpanCount(p.SpanCount, t)
 	case TraceState:
 		return matchTraceState(p.TraceState, t)
+	case OTTLCondition:
+		return matchOTTLCondition(e.ottlConditions[p.OTTLCondition], t)
 	case Probabilistic:
 		return matchProbabilistic(p.Probabilistic, p.Name, t)
 	case RateLimiting:
@@ -323,6 +365,7 @@ func subToPolicy(sub AndSubPolicyCfg) PolicyCfg {
 		BooleanAttribute: sub.BooleanAttribute,
 		SpanCount:        sub.SpanCount,
 		TraceState:       sub.TraceState,
+		OTTLCondition:    sub.OTTLCondition,
 	}
 }
 

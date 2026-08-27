@@ -11,9 +11,10 @@
 // supports the subset of policy types needed to express the boolean
 // predicates shown in the Policy Builder mock-up (spec.md ss25): always
 // sample, latency, status code, numeric/string/boolean attribute,
-// probabilistic, rate limiting, span count, trace state and an "and"
-// combinator. Unsupported real-processor policy types (composite, drop,
-// not, ottl_condition, ...) are out of scope for this MVP.
+// probabilistic, rate limiting, span count, trace state, ottl_condition
+// (span conditions only, see ottl.go) and an "and" combinator. Unsupported
+// real-processor policy types (composite, drop, not, and ottl_condition's
+// spanevent conditions) are out of scope for this MVP.
 //
 // Every struct also carries JSON tags mirroring the YAML ones so the same
 // types serve the Policy Builder REST API (spec.md ss25) without a second
@@ -42,6 +43,7 @@ const (
 	BooleanAttribute PolicyType = "boolean_attribute"
 	SpanCount        PolicyType = "span_count"
 	TraceState       PolicyType = "trace_state"
+	OTTLCondition    PolicyType = "ottl_condition"
 	And              PolicyType = "and"
 )
 
@@ -116,6 +118,7 @@ type PolicyCfg struct {
 	BooleanAttribute *BooleanAttributeCfg `yaml:"boolean_attribute,omitempty" json:"boolean_attribute,omitempty"`
 	SpanCount        *SpanCountCfg        `yaml:"span_count,omitempty" json:"span_count,omitempty"`
 	TraceState       *TraceStateCfg       `yaml:"trace_state,omitempty" json:"trace_state,omitempty"`
+	OTTLCondition    *OTTLConditionCfg    `yaml:"ottl_condition,omitempty" json:"ottl_condition,omitempty"`
 	And              *AndCfg              `yaml:"and,omitempty" json:"and,omitempty"`
 }
 
@@ -167,6 +170,19 @@ type TraceStateCfg struct {
 	Values []string `yaml:"values" json:"values"`
 }
 
+// OTTLConditionCfg holds one or more OTTL boolean expressions (see ottl.go).
+// A trace matches if any span in it satisfies any Span condition (OR/OR,
+// matching the upstream tailsamplingprocessor's semantics). SpanEvent is
+// accepted for YAML round-tripping (a pasted real Collector config may set
+// it) but is rejected at evaluator-construction time: this preview server
+// does not retain span event data (internal/trace.Span only tracks
+// EventCount), so it cannot evaluate spanevent conditions.
+type OTTLConditionCfg struct {
+	ErrorMode string   `yaml:"error_mode" json:"error_mode"`
+	Span      []string `yaml:"span" json:"span"`
+	SpanEvent []string `yaml:"spanevent,omitempty" json:"spanevent,omitempty"`
+}
+
 // AndCfg matches on every sub-policy (AND semantics), each of which reuses
 // the same shared field set as a top-level PolicyCfg minus nested "and".
 type AndCfg struct {
@@ -186,6 +202,7 @@ type AndSubPolicyCfg struct {
 	BooleanAttribute *BooleanAttributeCfg `yaml:"boolean_attribute,omitempty" json:"boolean_attribute,omitempty"`
 	SpanCount        *SpanCountCfg        `yaml:"span_count,omitempty" json:"span_count,omitempty"`
 	TraceState       *TraceStateCfg       `yaml:"trace_state,omitempty" json:"trace_state,omitempty"`
+	OTTLCondition    *OTTLConditionCfg    `yaml:"ottl_condition,omitempty" json:"ottl_condition,omitempty"`
 }
 
 // ParseYAML decodes a `tail_sampling:` processor configuration.

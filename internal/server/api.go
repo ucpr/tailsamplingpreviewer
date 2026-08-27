@@ -89,7 +89,10 @@ func (s *Server) handlePutPolicy(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	s.SetPolicy(cfg)
+	if err := s.SetPolicy(cfg); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 	writeJSON(w, http.StatusOK, s.Policy())
 }
 
@@ -114,7 +117,10 @@ func (s *Server) handlePutPolicyYAML(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	s.SetPolicy(cfg)
+	if err := s.SetPolicy(cfg); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 	writeJSON(w, http.StatusOK, s.Policy())
 }
 

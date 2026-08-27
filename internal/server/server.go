@@ -6,6 +6,7 @@ package server
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -58,10 +59,14 @@ func DefaultPolicy() sampling.Config {
 	}
 }
 
-func New(logger *zap.Logger, cfg Config) *Server {
+func New(logger *zap.Logger, cfg Config) (*Server, error) {
 	policy := cfg.InitialPolicy
 	if policy.DecisionWait.AsDuration() <= 0 {
 		policy = DefaultPolicy()
+	}
+	evaluator, err := sampling.NewEvaluator(policy)
+	if err != nil {
+		return nil, fmt.Errorf("initial policy: %w", err)
 	}
 	s := &Server{
 		logger:     logger,
@@ -69,12 +74,12 @@ func New(logger *zap.Logger, cfg Config) *Server {
 		store:      trace.NewStore(cfg.Store),
 		stats:      statistics.NewEngine(),
 		sessionMgr: session.NewManager(),
-		evaluator:  sampling.NewEvaluator(policy),
+		evaluator:  evaluator,
 		collectors: make(map[*collectorConn]struct{}),
 		browsers:   make(map[*browserConn]struct{}),
 	}
 	s.sessionMgr.OnChange(s.onSessionChange)
-	return s
+	return s, nil
 }
 
 // Run starts the background decision loop (spec.md ss21) and blocks until
@@ -124,9 +129,14 @@ func (s *Server) decideDue(now time.Time) {
 }
 
 // SetPolicy replaces the active Policy Engine configuration and
-// immediately re-evaluates every retained trace (spec.md ss24).
-func (s *Server) SetPolicy(cfg sampling.Config) {
-	ev := sampling.NewEvaluator(cfg)
+// immediately re-evaluates every retained trace (spec.md ss24). It returns
+// an error, leaving the previous policy active, if cfg fails to compile
+// (e.g. an invalid ottl_condition expression).
+func (s *Server) SetPolicy(cfg sampling.Config) error {
+	ev, err := sampling.NewEvaluator(cfg)
+	if err != nil {
+		return err
+	}
 
 	s.mu.Lock()
 	s.evaluator = ev
@@ -146,6 +156,7 @@ func (s *Server) SetPolicy(cfg sampling.Config) {
 	s.broadcastPolicyUpdated(cfg)
 	s.broadcastStatistics()
 	s.broadcastFullSnapshotToAllBrowsers()
+	return nil
 }
 
 func (s *Server) Policy() sampling.Config {

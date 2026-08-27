@@ -1,6 +1,6 @@
 import type { CommonFields } from "../policyDefaults";
-import { splitList } from "../policyDefaults";
-import type { PolicyType, StatusCode as StatusCodeValue } from "../types";
+import { splitList, splitLines } from "../policyDefaults";
+import type { OTTLConditionCfg, PolicyType, StatusCode as StatusCodeValue } from "../types";
 
 interface Props {
   type: PolicyType;
@@ -9,6 +9,7 @@ interface Props {
 }
 
 const STATUS_CODES: StatusCodeValue[] = ["OK", "ERROR", "UNSET"];
+const OTTL_ERROR_MODES: OTTLConditionCfg["error_mode"][] = ["ignore", "propagate", "silent"];
 
 function numberOrUndefined(raw: string): number | undefined {
   if (raw.trim() === "") return undefined;
@@ -295,6 +296,44 @@ export function TypeFields({ type, cfg, onChange }: Props) {
               onChange={(e) => onChange({ trace_state: { ...c, values: splitList(e.target.value) } })}
             />
           </label>
+        </div>
+      );
+    }
+
+    case "ottl_condition": {
+      const c = cfg.ottl_condition ?? { error_mode: "ignore" as const, span: [] };
+      return (
+        <div className="field-row">
+          <label>
+            error_mode
+            <select
+              value={c.error_mode}
+              onChange={(e) =>
+                onChange({
+                  ottl_condition: { ...c, error_mode: e.target.value as OTTLConditionCfg["error_mode"] },
+                })
+              }
+            >
+              {OTTL_ERROR_MODES.map((m) => (
+                <option key={m} value={m}>
+                  {m}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            Span conditions (one OTTL expression per line)
+            <textarea
+              rows={3}
+              value={c.span.join("\n")}
+              placeholder='attributes["http.status_code"] == 500'
+              onChange={(e) => onChange({ ottl_condition: { ...c, span: splitLines(e.target.value) } })}
+            />
+          </label>
+          <p className="field-hint">
+            Matches if any condition above is true (OR). Span event conditions are not supported by this
+            tool.
+          </p>
         </div>
       );
     }
