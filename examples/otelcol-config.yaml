@@ -1,0 +1,32 @@
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 127.0.0.1:4317
+      http:
+        endpoint: 127.0.0.1:4318
+
+processors:
+  memory_limiter:
+    check_interval: 1s
+    limit_mib: 512
+  batch:
+
+exporters:
+  debug:
+    verbosity: basic
+  tailpreview:
+    endpoint: ws://127.0.0.1:17777/v1/collector
+    queue:
+      enabled: true
+      size: 1000
+    reconnect:
+      enabled: true
+      interval: 5s
+
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, batch]
+      exporters: [debug, tailpreview]
