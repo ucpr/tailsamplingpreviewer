@@ -48,6 +48,48 @@ func TestDecision_String(t *testing.T) {
 	}
 }
 
+func TestSpan_ApproxSizeBytes(t *testing.T) {
+	const overhead = 128
+
+	tests := []struct {
+		name string
+		span Span
+		want uint64
+	}{
+		{"empty span costs just the fixed overhead", Span{}, overhead},
+		{"name length is counted", Span{Name: "handle-payment"}, overhead + 14},
+		{
+			name: "string attribute value length is counted",
+			span: Span{Attributes: map[string]any{"route": "/v1/pay"}},
+			want: overhead + uint64(len("route")) + uint64(len("/v1/pay")),
+		},
+		{
+			name: "numeric/bool attribute values cost a fixed 8 bytes",
+			span: Span{Attributes: map[string]any{"n": int64(1), "f": float64(1), "b": true}},
+			want: overhead + 3*1 + 3*8, // 1-byte keys + 8 bytes per scalar value
+		},
+		{
+			name: "everything adds up",
+			span: Span{
+				Name:          "handle",
+				ServiceName:   "payment-api",
+				StatusMessage: "boom",
+				TraceStateRaw: "vendor=otel",
+				Attributes:    map[string]any{"route": "/v1/pay"},
+			},
+			want: overhead + uint64(len("handle")+len("payment-api")+len("boom")+len("vendor=otel")+len("route")+len("/v1/pay")),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.span.approxSizeBytes(); got != tt.want {
+				t.Fatalf("approxSizeBytes() = %d, want %d", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestSpan_Duration(t *testing.T) {
 	start := time.Unix(0, 0)
 	s := Span{StartTime: start, EndTime: start.Add(250 * time.Millisecond)}

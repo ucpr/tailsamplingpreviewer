@@ -55,6 +55,35 @@ func (s Span) Duration() time.Duration {
 	return s.EndTime.Sub(s.StartTime)
 }
 
+// approxSizeBytes estimates this span's retained memory footprint. It is a
+// rough accounting (fixed struct overhead plus string/attribute lengths),
+// not an exact one, used to enforce StoreConfig.MaxMemory (spec.md ss31)
+// without the cost of reflection-based sizing.
+func (s Span) approxSizeBytes() uint64 {
+	const overhead = 128 // TraceID/SpanID/ParentSpanID, timestamps, enums, map/slice headers
+	size := uint64(overhead)
+	size += uint64(len(s.Name))
+	size += uint64(len(s.ServiceName))
+	size += uint64(len(s.StatusMessage))
+	size += uint64(len(s.TraceStateRaw))
+	for k, v := range s.Attributes {
+		size += uint64(len(k))
+		size += approxValueSizeBytes(v)
+	}
+	return size
+}
+
+func approxValueSizeBytes(v any) uint64 {
+	switch x := v.(type) {
+	case string:
+		return uint64(len(x))
+	case bool, int64, float64, int:
+		return 8
+	default:
+		return 16
+	}
+}
+
 // State is the lifecycle of a Trace aggregate (spec.md ss20).
 type State int
 

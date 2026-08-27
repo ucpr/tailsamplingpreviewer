@@ -132,6 +132,30 @@ func TestStore_EvictsByMaxAge(t *testing.T) {
 	}
 }
 
+func TestStore_EvictsByMaxMemory(t *testing.T) {
+	// Each empty single-span trace costs exactly the fixed overhead from
+	// Span.approxSizeBytes (128 bytes), so the budget below fits 2 traces.
+	s := NewStore(StoreConfig{MaxTraces: 100, MaxAge: time.Hour, MaxMemory: 300})
+	now := time.Now()
+
+	s.Ingest(now, map[pcommon.TraceID][]Span{mkID(1): {{}}})
+	s.Ingest(now.Add(time.Millisecond), map[pcommon.TraceID][]Span{mkID(2): {{}}})
+	s.Ingest(now.Add(2*time.Millisecond), map[pcommon.TraceID][]Span{mkID(3): {{}}})
+
+	if got := s.TotalBytes(); got > 300 {
+		t.Fatalf("TotalBytes() = %d, want <= 300 (MaxMemory)", got)
+	}
+	if _, ok := s.Get(mkID(1)); ok {
+		t.Fatal("expected the oldest trace to be evicted once MaxMemory was exceeded")
+	}
+	if _, ok := s.Get(mkID(3)); !ok {
+		t.Fatal("expected the newest trace to survive")
+	}
+	if s.Evicted() != 1 {
+		t.Fatalf("expected 1 eviction, got %d", s.Evicted())
+	}
+}
+
 func TestStore_ForEachMutate(t *testing.T) {
 	s := NewStore(StoreConfig{MaxTraces: 10, MaxAge: time.Hour})
 	now := time.Now()
@@ -172,8 +196,9 @@ func TestNewStore_DefaultsWhenUnset(t *testing.T) {
 		cfg  StoreConfig
 	}{
 		{"zero value config", StoreConfig{}},
-		{"zero MaxTraces only", StoreConfig{MaxTraces: 0, MaxAge: time.Hour}},
-		{"zero MaxAge only", StoreConfig{MaxTraces: 100, MaxAge: 0}},
+		{"zero MaxTraces only", StoreConfig{MaxTraces: 0, MaxAge: time.Hour, MaxMemory: 1024}},
+		{"zero MaxAge only", StoreConfig{MaxTraces: 100, MaxAge: 0, MaxMemory: 1024}},
+		{"zero MaxMemory only", StoreConfig{MaxTraces: 100, MaxAge: time.Hour, MaxMemory: 0}},
 		{"negative values", StoreConfig{MaxTraces: -1, MaxAge: -1}},
 	}
 	for _, tt := range tests {
@@ -186,11 +211,17 @@ func TestNewStore_DefaultsWhenUnset(t *testing.T) {
 			if s.cfg.MaxAge <= 0 {
 				t.Fatalf("MaxAge not defaulted: %v", s.cfg.MaxAge)
 			}
+			if s.cfg.MaxMemory <= 0 {
+				t.Fatalf("MaxMemory not defaulted: %d", s.cfg.MaxMemory)
+			}
 			if tt.cfg.MaxTraces <= 0 && s.cfg.MaxTraces != def.MaxTraces {
 				t.Fatalf("MaxTraces default = %d, want %d", s.cfg.MaxTraces, def.MaxTraces)
 			}
 			if tt.cfg.MaxAge <= 0 && s.cfg.MaxAge != def.MaxAge {
 				t.Fatalf("MaxAge default = %v, want %v", s.cfg.MaxAge, def.MaxAge)
+			}
+			if tt.cfg.MaxMemory <= 0 && s.cfg.MaxMemory != def.MaxMemory {
+				t.Fatalf("MaxMemory default = %d, want %d", s.cfg.MaxMemory, def.MaxMemory)
 			}
 		})
 	}

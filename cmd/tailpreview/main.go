@@ -28,6 +28,7 @@ func main() {
 	webDir := flag.String("web-dir", "web/dist", "directory containing the built Browser UI static assets")
 	maxTraces := flag.Int("max-traces", 10000, "ring buffer capacity (spec.md ss31)")
 	maxAge := flag.Duration("max-age", 5*time.Minute, "ring buffer max trace age (spec.md ss31)")
+	maxMemoryBytes := flag.Int64("max-memory-bytes", 512*1024*1024, "ring buffer approximate memory cap in bytes (spec.md ss31); oldest traces are evicted first once exceeded")
 	flag.Parse()
 
 	logger, err := zap.NewProduction()
@@ -39,7 +40,7 @@ func main() {
 
 	srv := server.New(logger, server.Config{
 		Version: version,
-		Store:   trace.StoreConfig{MaxTraces: *maxTraces, MaxAge: *maxAge},
+		Store:   trace.StoreConfig{MaxTraces: *maxTraces, MaxAge: *maxAge, MaxMemory: uint64(*maxMemoryBytes)},
 	})
 
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)

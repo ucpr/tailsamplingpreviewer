@@ -9,14 +9,19 @@ import (
 )
 
 // StoreConfig bounds the in-memory ring buffer (spec.md ss31). Traces are
-// never persisted to disk.
+// never persisted to disk. Note that MaxAge (and decision_wait, which is a
+// separate Policy Engine setting) only govern *when* a trace is decided;
+// eviction from memory is governed solely by MaxTraces/MaxAge/MaxMemory
+// here, so a decided trace stays visible in Live Tail until ring-buffer
+// pressure pushes it out.
 type StoreConfig struct {
 	MaxTraces int
 	MaxAge    time.Duration
+	MaxMemory uint64 // approximate retained bytes across all traces; 0 = use default
 }
 
 func DefaultStoreConfig() StoreConfig {
-	return StoreConfig{MaxTraces: 10000, MaxAge: 5 * time.Minute}
+	return StoreConfig{MaxTraces: 10000, MaxAge: 5 * time.Minute, MaxMemory: 512 * 1024 * 1024}
 }
 
 // Store is an in-memory, eviction-bounded collection of Trace aggregates.
@@ -25,10 +30,11 @@ func DefaultStoreConfig() StoreConfig {
 type Store struct {
 	cfg StoreConfig
 
-	mu      sync.Mutex
-	byID    map[pcommon.TraceID]*list.Element // element.Value is *Trace
-	order   *list.List                        // front = oldest FirstSeen, back = newest
-	evicted uint64
+	mu         sync.Mutex
+	byID       map[pcommon.TraceID]*list.Element // element.Value is *Trace
+	order      *list.List                        // front = oldest FirstSeen, back = newest
+	totalBytes uint64
+	evicted    uint64
 }
 
 func NewStore(cfg StoreConfig) *Store {
@@ -37,6 +43,9 @@ func NewStore(cfg StoreConfig) *Store {
 	}
 	if cfg.MaxAge <= 0 {
 		cfg.MaxAge = DefaultStoreConfig().MaxAge
+	}
+	if cfg.MaxMemory <= 0 {
+		cfg.MaxMemory = DefaultStoreConfig().MaxMemory
 	}
 	return &Store{
 		cfg:   cfg,
@@ -57,6 +66,11 @@ func (s *Store) Ingest(now time.Time, spansByTrace map[pcommon.TraceID][]Span) [
 
 	touched := make([]Trace, 0, len(spansByTrace))
 	for id, spans := range spansByTrace {
+		var addedBytes uint64
+		for _, sp := range spans {
+			addedBytes += sp.approxSizeBytes()
+		}
+
 		el, ok := s.byID[id]
 		var t *Trace
 		if ok {
@@ -79,6 +93,8 @@ func (s *Store) Ingest(now time.Time, spansByTrace map[pcommon.TraceID][]Span) [
 			}
 			s.byID[id] = s.order.PushBack(t)
 		}
+		t.SizeBytes += addedBytes
+		s.totalBytes += addedBytes
 		touched = append(touched, cloneTrace(t))
 	}
 
@@ -176,8 +192,17 @@ func (s *Store) Len() int {
 	return s.order.Len()
 }
 
+// TotalBytes reports the approximate retained memory across every trace
+// currently in the store (feeds tailpreview_trace_buffer_bytes,
+// spec.md ss36), used to enforce MaxMemory.
+func (s *Store) TotalBytes() uint64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.totalBytes
+}
+
 // Evicted reports the cumulative number of traces dropped from the ring
-// buffer due to MaxTraces/MaxAge pressure (feeds
+// buffer due to MaxTraces/MaxAge/MaxMemory pressure (feeds
 // tailpreview_trace_evicted_total, spec.md ss36).
 func (s *Store) Evicted() uint64 {
 	s.mu.Lock()
@@ -185,33 +210,32 @@ func (s *Store) Evicted() uint64 {
 	return s.evicted
 }
 
-// evictLocked drops the oldest traces until the store satisfies
-// MaxTraces/MaxAge. Callers must hold s.mu.
+// evictLocked drops the oldest traces (front of the list) until the store
+// satisfies MaxTraces, MaxAge and MaxMemory. Traces are always sacrificed
+// oldest-first, regardless of which constraint is currently violated: the
+// list is kept ordered by recency (Ingest calls MoveToBack), so the front
+// element is always the best eviction candidate. Callers must hold s.mu.
 func (s *Store) evictLocked(now time.Time) {
-	for s.order.Len() > s.cfg.MaxTraces {
-		s.popOldestLocked()
-	}
-	for el := s.order.Front(); el != nil; {
-		t := el.Value.(*Trace)
-		if now.Sub(t.LastSeen) <= s.cfg.MaxAge {
-			break
+	for {
+		el := s.order.Front()
+		if el == nil {
+			return
 		}
-		next := el.Next()
-		s.removeLocked(el, t.TraceID)
-		el = next
-	}
-}
+		t := el.Value.(*Trace)
 
-func (s *Store) popOldestLocked() {
-	el := s.order.Front()
-	if el == nil {
-		return
+		overCount := s.order.Len() > s.cfg.MaxTraces
+		overAge := s.cfg.MaxAge > 0 && now.Sub(t.LastSeen) > s.cfg.MaxAge
+		overMemory := s.cfg.MaxMemory > 0 && s.totalBytes > s.cfg.MaxMemory
+		if !overCount && !overAge && !overMemory {
+			return
+		}
+		s.removeLocked(el, t.TraceID)
 	}
-	t := el.Value.(*Trace)
-	s.removeLocked(el, t.TraceID)
 }
 
 func (s *Store) removeLocked(el *list.Element, id pcommon.TraceID) {
+	t := el.Value.(*Trace)
+	s.totalBytes -= t.SizeBytes
 	s.order.Remove(el)
 	delete(s.byID, id)
 	s.evicted++
