@@ -9,12 +9,19 @@ interface Props {
   onSelect: (traceId: string) => void;
 }
 
+// Three-way outcome bucket shared with SpanVolumeChart so the chart's
+// segment colors line up exactly with what the Decision badge shows.
+export type Outcome = "keep" | "drop" | "live";
+
+export function classifyOutcome(t: TraceSummary): Outcome {
+  if (t.state === "DECIDED") return t.decision === "KEEP" ? "keep" : "drop";
+  return "live";
+}
+
 function decisionBadge(t: TraceSummary): { label: string; className: string; title: string } {
-  if (t.state === "DECIDED") {
-    return t.decision === "KEEP"
-      ? { label: "KEEP", className: "badge badge--keep", title: "Final decision" }
-      : { label: "DROP", className: "badge badge--drop", title: "Final decision" };
-  }
+  const outcome = classifyOutcome(t);
+  if (outcome === "keep") return { label: "KEEP", className: "badge badge--keep", title: "Final decision" };
+  if (outcome === "drop") return { label: "DROP", className: "badge badge--drop", title: "Final decision" };
   if (t.decision === "KEEP") {
     return { label: "LIVE", className: "badge badge--live-keep", title: "Provisional: would KEEP" };
   }

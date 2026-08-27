@@ -29,6 +29,7 @@ export interface SpanSummary {
   end_time: string;
   duration_ms: number;
   status_code: StatusCode;
+  attributes: Record<string, unknown>;
 }
 
 export interface TraceDetail extends TraceSummary {

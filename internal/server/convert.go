@@ -37,6 +37,7 @@ func toDetail(t *itrace.Trace) TraceDetail {
 			EndTime:      s.EndTime,
 			DurationMs:   s.Duration().Milliseconds(),
 			StatusCode:   statusLabel(s.StatusCode),
+			Attributes:   s.Attributes,
 		})
 	}
 	return TraceDetail{TraceSummary: toSummary(t), Spans: spans}

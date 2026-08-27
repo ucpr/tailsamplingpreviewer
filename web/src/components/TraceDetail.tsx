@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { getTrace } from "../api";
 import { useAppState } from "../state";
 import { formatDurationMs } from "../format";
@@ -38,6 +38,11 @@ export function TraceDetail({ traceId, onClose }: Props) {
   const [detail, setDetail] = useState<TraceDetailType | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [selectedSpanId, setSelectedSpanId] = useState<string | null>(null);
+
+  useEffect(() => {
+    setSelectedSpanId(null);
+  }, [traceId]);
 
   useEffect(() => {
     if (!traceId) {
@@ -64,11 +69,25 @@ export function TraceDetail({ traceId, onClose }: Props) {
     };
   }, [traceId, summary?.span_count, summary?.state, summary?.decision]);
 
+  const waterfall = useMemo(() => (detail ? buildWaterfall(detail.spans) : []), [detail]);
+
+  // Default-select the earliest-starting span (the root span, or the
+  // earliest arrival if the true root hasn't arrived yet) once a trace's
+  // spans load, so attributes show something immediately.
+  useEffect(() => {
+    if (selectedSpanId === null && waterfall.length > 0) {
+      setSelectedSpanId(waterfall[0].span.span_id);
+    }
+  }, [waterfall, selectedSpanId]);
+
   if (!traceId) return null;
 
-  const waterfall = detail ? buildWaterfall(detail.spans) : [];
   const matched = new Set(detail?.matched_policies ?? []);
   const allPolicyNames = detail?.matched_policies ?? [];
+  const selectedSpan = detail?.spans.find((s) => s.span_id === selectedSpanId) ?? null;
+  const attributeEntries = selectedSpan
+    ? Object.entries(selectedSpan.attributes ?? {}).sort(([a], [b]) => a.localeCompare(b))
+    : [];
 
   return (
     <aside className="trace-detail">
@@ -126,7 +145,11 @@ export function TraceDetail({ traceId, onClose }: Props) {
           <h3 className="panel__subtitle">Waterfall</h3>
           <div className="waterfall">
             {waterfall.map(({ span, leftPct, widthPct }) => (
-              <div className="waterfall__row" key={span.span_id}>
+              <div
+                className={`waterfall__row ${span.span_id === selectedSpanId ? "is-selected" : ""}`}
+                key={span.span_id}
+                onClick={() => setSelectedSpanId(span.span_id)}
+              >
                 <div className="waterfall__label" title={`${span.service_name} · ${span.name}`}>
                   {span.name}
                 </div>
@@ -141,6 +164,26 @@ export function TraceDetail({ traceId, onClose }: Props) {
               </div>
             ))}
           </div>
+
+          <h3 className="panel__subtitle">
+            Attributes{selectedSpan ? <span className="mono"> — {selectedSpan.name}</span> : null}
+          </h3>
+          {!selectedSpan ? (
+            <p className="app-header__empty">Select a span to view its attributes.</p>
+          ) : attributeEntries.length === 0 ? (
+            <p className="app-header__empty">No attributes on this span.</p>
+          ) : (
+            <div className="attribute-list-wrap">
+              <dl className="attribute-list">
+                {attributeEntries.map(([key, value]) => (
+                  <div className="attribute-list__row" key={key}>
+                    <dt className="mono">{key}</dt>
+                    <dd className="mono">{String(value)}</dd>
+                  </div>
+                ))}
+              </dl>
+            </div>
+          )}
         </>
       )}
     </aside>
