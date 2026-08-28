@@ -121,6 +121,10 @@ github.com/open-telemetry/opentelemetry-collector-contrib/internal/coreinternal 
 github.com/open-telemetry/opentelemetry-collector-contrib/internal/coreinternal v0.159.0/go.mod h1:MIo6UvOnouNO14chDWK/kaXapjwGHb9U0xk6GegYMvo=
 github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl v0.159.0 h1:PB+0S/90C9SN7LyUR76bDVvwrL7DDQ7Q/A4BRDmUkD8=
 github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl v0.159.0/go.mod h1:PoR6szOvbxES/Xntr9+33QdfSpBquG9vkA0pB3PPEYY=
+github.com/open-telemetry/opentelemetry-collector-contrib/pkg/pdatatest v0.159.0 h1:7JKqFkaTAaLCgP4XY57EAIDXGD4xb0NnlNVhIZ0fEd8=
+github.com/open-telemetry/opentelemetry-collector-contrib/pkg/pdatatest v0.159.0/go.mod h1:Hc+PQQduHGJKUXXumlIydv2jr07sFN5yIllZDldoMKc=
+github.com/open-telemetry/opentelemetry-collector-contrib/pkg/pdatautil v0.159.0 h1:myQAaDpKnfPy/KU9BsBEWPsinvEPI4UFO5Yi2v7RiTU=
+github.com/open-telemetry/opentelemetry-collector-contrib/pkg/pdatautil v0.159.0/go.mod h1:Qzcts6LLXE+jpdEy1LCHL2Ddgit8hw08Ifj3zuYTitw=
 github.com/open-telemetry/opentelemetry-collector-contrib/pkg/sampling v0.159.0 h1:DRauVAt9PgtN0KqvCRZDHQGzp7aefbNRaOwTQhUe5Mk=
 github.com/open-telemetry/opentelemetry-collector-contrib/pkg/sampling v0.159.0/go.mod h1:PJCA+qaFSYu4tBQEhT0+jxvrb3yPczROEK28E29bH1I=
 github.com/open-telemetry/opentelemetry-collector-contrib/processor/tailsamplingprocessor v0.159.0 h1:PKpkO+jaPOaK6fWzJm1t1gAHxu4Xk+8z56h46U5gYO4=

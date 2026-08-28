@@ -54,16 +54,29 @@ schema grows.
   plain v0.154.0-shaped `Evaluate` (all sub-policies must return Sampled),
   which produces byte-identical `Decision` values to v0.159.0's `Evaluate`.
 
-Everything else (`always_sample.go`, `latency.go`, `numeric_tag_filter.go`,
+Everything else — `always_sample.go`, `latency.go`, `numeric_tag_filter.go`,
 `string_tag_filter.go`, `boolean_tag_filter.go`, `status_code.go`,
 `span_count_sampler.go`, `trace_state_filter.go`, `rate_limiting.go`,
-`ottl.go`, `util.go` trimmed to the helpers actually used) is byte-for-byte
-upstream logic, modulo import paths (`filterottl` now points at the local
-copy below instead of the internal one).
+`util.go`, and all of `filterottl/` (`filter.go`, `path_context.go`,
+`functions.go`) — is a **full, unmodified file copy**, not a hand-picked
+subset: `update.sh` (see below) can `cp` these straight from the module
+cache. `util.go`'s `WriteEffectiveThreshold` and `filterottl`'s metric/log/
+resource/scope/datapoint/exemplar/profile functions are unused by anything
+in this project today, but keeping the whole file is what makes updates
+mechanical — every dependency they pull in (`pkg/sampling`,
+`go.opentelemetry.io/otel/metric`, `pdata/pmetric`, the other `pkg/ottl/
+contexts/*` packages) is public API anyway. `sampling/ottl.go` is the one
+exception with a one-line difference: its `filterottl` import points at the
+local copy below instead of the internal one; `update.sh` rewrites that
+line automatically after copying.
 
-`filterottl/` is trimmed to the span/spanevent-only surface `ottl.go`
-actually calls: `NewBoolExprForSpanWithPathContextNames`,
-`NewBoolExprForSpanEventWithPathContextNames`, `StandardSpanFuncs`,
-`StandardSpanEventFuncs`, and their shared helpers. The metric/log/resource/
-scope/datapoint/exemplar/profile variants in the real package were dropped
-since nothing here calls them.
+## Keeping this up to date
+
+Run `internal/upstreamtsp/update.sh [version]` (default: the latest
+`tailsamplingprocessor` release) to refresh everything above, bump the
+`go.mod` pin, and re-run the test suite. `and.go` and `probabilistic.go`
+are never touched by the script — it only prints a diff between the new
+upstream source and what's vendored here, since those two require a human
+to judge whether upstream's real changes (as opposed to the tracestate
+simplification already made) need porting over by hand. See the script's
+own comments for the full step list.
