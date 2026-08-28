@@ -39,7 +39,7 @@ func TestEvaluate_OTTLCondition_SpanAttribute(t *testing.T) {
 			},
 		},
 	}
-	if res := ev.Evaluate(matching, time.Now()); res.Decision != itrace.DecisionKeep {
+	if res := evaluateT(t, ev, matching); res.Decision != itrace.DecisionKeep {
 		t.Fatalf("expected KEEP, got %v (%+v)", res.Decision, res)
 	}
 
@@ -57,7 +57,7 @@ func TestEvaluate_OTTLCondition_SpanAttribute(t *testing.T) {
 			},
 		},
 	}
-	if res := ev.Evaluate(nonMatching, time.Now()); res.Decision != itrace.DecisionDrop {
+	if res := evaluateT(t, ev, nonMatching); res.Decision != itrace.DecisionDrop {
 		t.Fatalf("expected DROP, got %v (%+v)", res.Decision, res)
 	}
 }

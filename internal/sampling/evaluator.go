@@ -1,89 +1,105 @@
+// Evaluator runs a Config's policies using the real tailsamplingprocessor
+// policy implementations vendored into internal/upstreamtsp (a copy is
+// necessary, not a direct import, because they live under a path segment
+// named `internal` in a different module — see
+// internal/upstreamtsp/NOTICE.md). A trace is KEPT if any top-level policy
+// matches (spec.md ss23-25), the same "OR across policies" semantics the
+// real processor uses absent any "drop" policy, which Config cannot
+// express (see NewEvaluator's doc comment for what's out of scope).
+//
+// Re-creating an Evaluator from a new Config and re-running Evaluate over
+// the Store is how Policy Update re-evaluation works (spec.md ss24).
 package sampling
 
 import (
+	"context"
+	"errors"
 	"fmt"
-	"hash/fnv"
-	"regexp"
-	"sync"
-	"time"
+	"strings"
+
+	"go.opentelemetry.io/collector/component"
+	"go.opentelemetry.io/collector/pdata/pcommon"
+	"go.opentelemetry.io/collector/pdata/ptrace"
+	noopmetric "go.opentelemetry.io/otel/metric/noop"
+	nooptrace "go.opentelemetry.io/otel/trace/noop"
+	"go.uber.org/zap"
 
 	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl"
-	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl/contexts/ottlspan"
+	"github.com/open-telemetry/opentelemetry-collector-contrib/processor/tailsamplingprocessor/pkg/samplingpolicy"
 
 	"github.com/ucpr/tailsamplingpreviewer/internal/trace"
+	upstream "github.com/ucpr/tailsamplingpreviewer/internal/upstreamtsp/sampling"
 )
 
-// Evaluator evaluates a Config's policies against Traces. A trace is KEPT
-// if any top-level policy matches (spec.md ss23-25). Re-creating an
-// Evaluator from a new Config and re-running Evaluate over the Store is
-// how Policy Update re-evaluation works (spec.md ss24).
+// ottlTelemetrySettings is the no-op telemetry plumbing the vendored
+// evaluator constructors and the OTTL parser/evaluator API require but
+// which a preview server (no real Collector pipeline running) has no use
+// for. Equivalent to componenttest.NewNopTelemetrySettings(), reimplemented
+// here so production code doesn't depend on a "test" package.
+var ottlTelemetrySettings = component.TelemetrySettings{
+	Logger:         zap.NewNop(),
+	TracerProvider: nooptrace.NewTracerProvider(),
+	MeterProvider:  noopmetric.NewMeterProvider(),
+	Resource:       pcommon.NewResource(),
+}
+
+// Evaluator is the samplingpolicy.Evaluator-backed policy engine. One
+// samplingpolicy.Evaluator is built per top-level policy at construction
+// time (mirroring how a real Collector builds its processor once per
+// config load), so stateful policies (rate_limiting's token bucket) carry
+// state across Evaluate calls exactly as they would in a running
+// Collector.
 type Evaluator struct {
-	cfg Config
-
-	mu          sync.Mutex
-	rateWindows map[string]*rateWindow
-	regexCache  map[string]*regexp.Regexp
-
-	// ottlConditions holds every ottl_condition policy's compiled
-	// expression, keyed by the pointer identity of its OTTLConditionCfg
-	// (stable for the lifetime of this Evaluator: cfg is never mutated
-	// after construction). Compiling once here, like regexCache does for
-	// string_attribute regexes, avoids re-parsing OTTL on every Evaluate.
-	ottlConditions map[*OTTLConditionCfg]*ottl.ConditionSequence[*ottlspan.TransformContext]
+	cfg        Config
+	evaluators []samplingpolicy.Evaluator
 }
 
-type rateWindow struct {
-	second int64
-	count  int64
-}
-
-// NewEvaluator compiles cfg's policies (including every ottl_condition's
-// OTTL expressions) and returns an error if any of them are invalid,
-// instead of failing later or panicking during Evaluate.
+// NewEvaluator compiles cfg's policies into the vendored evaluators,
+// returning an error if any policy is missing required configuration or
+// isn't representable by them (see internal/upstreamtsp/NOTICE.md for what
+// upstream policy types are excluded and why: composite/drop/not/
+// trace_flags/bytes_limiting have no corresponding Config policy type to
+// build them from yet).
 func NewEvaluator(cfg Config) (*Evaluator, error) {
-	e := &Evaluator{
-		cfg:            cfg,
-		rateWindows:    make(map[string]*rateWindow),
-		regexCache:     make(map[string]*regexp.Regexp),
-		ottlConditions: make(map[*OTTLConditionCfg]*ottl.ConditionSequence[*ottlspan.TransformContext]),
-	}
+	evs := make([]samplingpolicy.Evaluator, 0, len(cfg.Policies))
 	for _, p := range cfg.Policies {
-		if err := e.compileOTTL(p.OTTLCondition); err != nil {
+		ev, err := buildEvaluator(p)
+		if err != nil {
 			return nil, fmt.Errorf("policy %q: %w", p.Name, err)
 		}
-		if p.Type == And && p.And != nil {
-			for _, sub := range p.And.SubPolicies {
-				if err := e.compileOTTL(sub.OTTLCondition); err != nil {
-					return nil, fmt.Errorf("policy %q sub-policy %q: %w", p.Name, sub.Name, err)
-				}
-			}
-		}
+		evs = append(evs, ev)
 	}
-	return e, nil
-}
-
-func (e *Evaluator) compileOTTL(c *OTTLConditionCfg) error {
-	if c == nil {
-		return nil
-	}
-	seq, err := compileOTTLSpanCondition(c)
-	if err != nil {
-		return err
-	}
-	e.ottlConditions[c] = seq
-	return nil
+	return &Evaluator{cfg: cfg, evaluators: evs}, nil
 }
 
 func (e *Evaluator) Config() Config { return e.cfg }
 
-// Evaluate runs every configured policy against t and returns the KEEP/DROP
-// decision plus per-policy match results.
-func (e *Evaluator) Evaluate(t *trace.Trace, now time.Time) EvalResult {
+// Evaluate rehydrates t into a ptrace.Traces batch and runs every compiled
+// evaluator against it. There is no injectable clock parameter: every
+// vendored evaluator here either doesn't need wall-clock time at all or
+// (rate_limiting) reads the real system clock directly — see
+// internal/upstreamtsp/sampling/rate_limiting.go, whose
+// samplingpolicy.Evaluator.Evaluate signature has no clock parameter
+// either, matching how a real Collector's rate limiter can't be driven by
+// synthetic timestamps.
+func (e *Evaluator) Evaluate(t *trace.Trace) (EvalResult, error) {
+	ctx := context.Background()
+	td, spanCount, sizeBytes := rehydrateTraceData(t)
+	traceData := &samplingpolicy.TraceData{
+		SpanCount:       spanCount,
+		SizeBytes:       sizeBytes,
+		ReceivedBatches: td,
+	}
+
 	results := make([]PolicyResult, 0, len(e.cfg.Policies))
 	kept := false
-
-	for _, p := range e.cfg.Policies {
-		matched := e.matchPolicy(p, t, now)
+	for i, p := range e.cfg.Policies {
+		decision, err := e.evaluators[i].Evaluate(ctx, t.TraceID, traceData)
+		if err != nil {
+			return EvalResult{}, fmt.Errorf("policy %q: %w", p.Name, err)
+		}
+		//nolint:staticcheck // SA1019: upstream still returns these pending their removal.
+		matched := decision == samplingpolicy.Sampled || decision == samplingpolicy.InvertSampled
 		results = append(results, PolicyResult{Name: p.Name, Matched: matched})
 		if matched {
 			kept = true
@@ -94,264 +110,100 @@ func (e *Evaluator) Evaluate(t *trace.Trace, now time.Time) EvalResult {
 	if kept {
 		decision = trace.DecisionKeep
 	}
-	return EvalResult{Decision: decision, Policies: results}
+	return EvalResult{Decision: decision, Policies: results}, nil
 }
 
-func (e *Evaluator) matchPolicy(p PolicyCfg, t *trace.Trace, now time.Time) bool {
+func buildEvaluator(p PolicyCfg) (samplingpolicy.Evaluator, error) {
 	switch p.Type {
 	case AlwaysSample:
-		return true
+		return upstream.NewAlwaysSample(ottlTelemetrySettings), nil
+
 	case Latency:
-		return matchLatency(p.Latency, t)
+		if p.Latency == nil {
+			return nil, errors.New("latency config required")
+		}
+		return upstream.NewLatency(ottlTelemetrySettings, p.Latency.ThresholdMs, p.Latency.UpperThresholdMs), nil
+
 	case StatusCode:
-		return matchStatusCode(p.StatusCode, t)
+		if p.StatusCode == nil {
+			return nil, errors.New("status_code config required")
+		}
+		return upstream.NewStatusCodeFilter(ottlTelemetrySettings, p.StatusCode.StatusCodes)
+
 	case NumericAttribute:
-		return matchNumericAttribute(p.NumericAttribute, t)
+		if p.NumericAttribute == nil {
+			return nil, errors.New("numeric_attribute config required")
+		}
+		c := p.NumericAttribute
+		minV, maxV := c.MinValue, c.MaxValue
+		return upstream.NewNumericAttributeFilter(ottlTelemetrySettings, c.Key, &minV, &maxV, c.InvertMatch), nil
+
 	case StringAttribute:
-		return e.matchStringAttribute(p.StringAttribute, t)
+		if p.StringAttribute == nil {
+			return nil, errors.New("string_attribute config required")
+		}
+		c := p.StringAttribute
+		return upstream.NewStringAttributeFilter(ottlTelemetrySettings, c.Key, c.Values, c.EnabledRegexMatching, 0, c.InvertMatch)
+
 	case BooleanAttribute:
-		return matchBooleanAttribute(p.BooleanAttribute, t)
+		if p.BooleanAttribute == nil {
+			return nil, errors.New("boolean_attribute config required")
+		}
+		c := p.BooleanAttribute
+		return upstream.NewBooleanAttributeFilter(ottlTelemetrySettings, c.Key, c.Value, c.InvertMatch), nil
+
 	case SpanCount:
-		return matchSpanCount(p.SpanCount, t)
+		if p.SpanCount == nil {
+			return nil, errors.New("span_count config required")
+		}
+		c := p.SpanCount
+		return upstream.NewSpanCount(ottlTelemetrySettings, c.MinSpans, c.MaxSpans), nil
+
 	case TraceState:
-		return matchTraceState(p.TraceState, t)
-	case OTTLCondition:
-		return matchOTTLCondition(e.ottlConditions[p.OTTLCondition], t)
+		if p.TraceState == nil {
+			return nil, errors.New("trace_state config required")
+		}
+		c := p.TraceState
+		return upstream.NewTraceStateFilter(ottlTelemetrySettings, c.Key, c.Values), nil
+
 	case Probabilistic:
-		return matchProbabilistic(p.Probabilistic, p.Name, t)
+		if p.Probabilistic == nil {
+			return nil, errors.New("probabilistic config required")
+		}
+		c := p.Probabilistic
+		return upstream.NewProbabilisticSampler(ottlTelemetrySettings, c.HashSalt, c.SamplingPercentage), nil
+
 	case RateLimiting:
-		return e.matchRateLimiting(p.RateLimiting, p.Name, t, now)
+		if p.RateLimiting == nil {
+			return nil, errors.New("rate_limiting config required")
+		}
+		return upstream.NewRateLimiting(ottlTelemetrySettings, p.RateLimiting.SpansPerSecond), nil
+
+	case OTTLCondition:
+		return buildOTTL(p.OTTLCondition)
+
 	case And:
-		return e.matchAnd(p.And, t, now)
+		if p.And == nil || len(p.And.SubPolicies) == 0 {
+			return nil, errors.New("and requires at least one sub-policy")
+		}
+		subs := make([]samplingpolicy.Evaluator, 0, len(p.And.SubPolicies))
+		for _, sub := range p.And.SubPolicies {
+			ev, err := buildEvaluator(subToPolicy(sub))
+			if err != nil {
+				return nil, fmt.Errorf("sub-policy %q: %w", sub.Name, err)
+			}
+			subs = append(subs, ev)
+		}
+		return upstream.NewAnd(ottlTelemetrySettings.Logger, subs), nil
+
 	default:
-		return false
+		return nil, fmt.Errorf("unsupported policy type %q", p.Type)
 	}
 }
 
-func matchLatency(c *LatencyCfg, t *trace.Trace) bool {
-	if c == nil {
-		return false
-	}
-	ms := t.Duration().Milliseconds()
-	if ms < c.ThresholdMs {
-		return false
-	}
-	if c.UpperThresholdMs > 0 && ms > c.UpperThresholdMs {
-		return false
-	}
-	return true
-}
-
-func matchStatusCode(c *StatusCodeCfg, t *trace.Trace) bool {
-	if c == nil {
-		return false
-	}
-	want := make(map[string]bool, len(c.StatusCodes))
-	for _, code := range c.StatusCodes {
-		want[code] = true
-	}
-	for _, s := range t.Spans {
-		if want[statusLabel(s.StatusCode)] {
-			return true
-		}
-	}
-	return false
-}
-
-func statusLabel(c trace.StatusCode) string {
-	switch c {
-	case trace.StatusCodeOK:
-		return "OK"
-	case trace.StatusCodeError:
-		return "ERROR"
-	default:
-		return "UNSET"
-	}
-}
-
-func matchNumericAttribute(c *NumericAttributeCfg, t *trace.Trace) bool {
-	if c == nil {
-		return false
-	}
-	matched := anySpanAttr(t, c.Key, func(v any) bool {
-		n, ok := asFloat64(v)
-		if !ok {
-			return false
-		}
-		return int64(n) >= c.MinValue && int64(n) <= c.MaxValue
-	})
-	if c.InvertMatch {
-		return !matched
-	}
-	return matched
-}
-
-func (e *Evaluator) matchStringAttribute(c *StringAttributeCfg, t *trace.Trace) bool {
-	if c == nil {
-		return false
-	}
-	matched := anySpanAttr(t, c.Key, func(v any) bool {
-		s, ok := v.(string)
-		if !ok {
-			return false
-		}
-		if c.EnabledRegexMatching {
-			for _, pattern := range c.Values {
-				if e.regexMatch(pattern, s) {
-					return true
-				}
-			}
-			return false
-		}
-		for _, want := range c.Values {
-			if s == want {
-				return true
-			}
-		}
-		return false
-	})
-	if c.InvertMatch {
-		return !matched
-	}
-	return matched
-}
-
-func (e *Evaluator) regexMatch(pattern, s string) bool {
-	e.mu.Lock()
-	re, ok := e.regexCache[pattern]
-	if !ok {
-		re = regexp.MustCompile(pattern)
-		e.regexCache[pattern] = re
-	}
-	e.mu.Unlock()
-	return re.MatchString(s)
-}
-
-func matchBooleanAttribute(c *BooleanAttributeCfg, t *trace.Trace) bool {
-	if c == nil {
-		return false
-	}
-	matched := anySpanAttr(t, c.Key, func(v any) bool {
-		b, ok := v.(bool)
-		return ok && b == c.Value
-	})
-	if c.InvertMatch {
-		return !matched
-	}
-	return matched
-}
-
-func matchSpanCount(c *SpanCountCfg, t *trace.Trace) bool {
-	if c == nil {
-		return false
-	}
-	n := int32(len(t.Spans))
-	if n < c.MinSpans {
-		return false
-	}
-	if c.MaxSpans > 0 && n > c.MaxSpans {
-		return false
-	}
-	return true
-}
-
-func matchTraceState(c *TraceStateCfg, t *trace.Trace) bool {
-	if c == nil {
-		return false
-	}
-	for _, s := range t.Spans {
-		v, ok := parseTraceState(s.TraceStateRaw)[c.Key]
-		if !ok {
-			continue
-		}
-		for _, want := range c.Values {
-			if v == want {
-				return true
-			}
-		}
-	}
-	return false
-}
-
-// parseTraceState parses a W3C tracestate header ("k1=v1,k2=v2") into a map.
-func parseTraceState(raw string) map[string]string {
-	out := map[string]string{}
-	start := 0
-	for i := 0; i <= len(raw); i++ {
-		if i == len(raw) || raw[i] == ',' {
-			member := raw[start:i]
-			if eq := indexByte(member, '='); eq >= 0 {
-				out[member[:eq]] = member[eq+1:]
-			}
-			start = i + 1
-		}
-	}
-	return out
-}
-
-func indexByte(s string, b byte) int {
-	for i := 0; i < len(s); i++ {
-		if s[i] == b {
-			return i
-		}
-	}
-	return -1
-}
-
-func matchProbabilistic(c *ProbabilisticCfg, policyName string, t *trace.Trace) bool {
-	if c == nil {
-		return false
-	}
-	h := fnv.New32a()
-	_, _ = h.Write(t.TraceID[:])
-	_, _ = h.Write([]byte(c.HashSalt))
-	_, _ = h.Write([]byte(policyName))
-	bucket := float64(h.Sum32()%10000) / 100.0 // [0, 100)
-	return bucket < c.SamplingPercentage
-}
-
-// matchRateLimiting is a best-effort approximation: it caps the number of
-// *evaluations* accepted per wall-clock second per policy. Because Preview
-// re-evaluation can replay a whole ring buffer instantaneously (spec.md
-// ss24), this is necessarily approximate rather than a faithful replay of
-// the Collector's real-time rate limiter.
-func (e *Evaluator) matchRateLimiting(c *RateLimitingCfg, policyName string, t *trace.Trace, now time.Time) bool {
-	if c == nil || c.SpansPerSecond <= 0 {
-		return false
-	}
-	spans := int64(len(t.Spans))
-
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	w, ok := e.rateWindows[policyName]
-	if !ok {
-		w = &rateWindow{}
-		e.rateWindows[policyName] = w
-	}
-	sec := now.Unix()
-	if w.second != sec {
-		w.second = sec
-		w.count = 0
-	}
-	if w.count+spans > c.SpansPerSecond {
-		return false
-	}
-	w.count += spans
-	return true
-}
-
-func (e *Evaluator) matchAnd(c *AndCfg, t *trace.Trace, now time.Time) bool {
-	if c == nil || len(c.SubPolicies) == 0 {
-		return false
-	}
-	for _, sub := range c.SubPolicies {
-		if !e.matchPolicy(subToPolicy(sub), t, now) {
-			return false
-		}
-	}
-	return true
-}
-
+// subToPolicy converts an AndSubPolicyCfg (which cannot itself nest an
+// "and") into the equivalent top-level PolicyCfg so buildEvaluator can
+// build both from one switch.
 func subToPolicy(sub AndSubPolicyCfg) PolicyCfg {
 	return PolicyCfg{
 		Name:             sub.Name,
@@ -369,24 +221,84 @@ func subToPolicy(sub AndSubPolicyCfg) PolicyCfg {
 	}
 }
 
-func anySpanAttr(t *trace.Trace, key string, pred func(any) bool) bool {
-	for _, s := range t.Spans {
-		if v, ok := s.Attributes[key]; ok && pred(v) {
-			return true
+// buildOTTL validates c the way the real tail_sampling processor's config
+// loader would before handing it to the vendored NewOTTLConditionFilter.
+// SpanEvent is rejected outright: this preview server doesn't retain span
+// event data (internal/trace.Span only tracks EventCount), so there is
+// nothing to evaluate spanevent conditions against.
+func buildOTTL(c *OTTLConditionCfg) (samplingpolicy.Evaluator, error) {
+	if c == nil {
+		return nil, errors.New("ottl_condition config required")
+	}
+	if len(c.SpanEvent) > 0 {
+		return nil, errors.New("ottl_condition.spanevent is not supported by the preview server (span events are not retained); use span conditions only")
+	}
+	if len(c.Span) == 0 {
+		return nil, errors.New("ottl_condition requires at least one span condition")
+	}
+
+	errorMode := ottl.PropagateError
+	if c.ErrorMode != "" {
+		if err := errorMode.UnmarshalText([]byte(c.ErrorMode)); err != nil {
+			return nil, fmt.Errorf("ottl_condition.error_mode: %w", err)
 		}
 	}
-	return false
+
+	return upstream.NewOTTLConditionFilter(ottlTelemetrySettings, c.Span, nil, errorMode)
 }
 
-func asFloat64(v any) (float64, bool) {
-	switch n := v.(type) {
-	case float64:
-		return n, true
-	case int64:
-		return float64(n), true
-	case int:
-		return float64(n), true
+// rehydrateTraceData rebuilds a full ptrace.Traces (one ResourceSpans per
+// span) from t, since samplingpolicy.Evaluator only operates on pdata,
+// never on this project's flattened trace.Span. internal/trace/assembler.go
+// flattens resource and span attributes into t.Attributes under
+// "resource."/"attributes."-prefixed keys, which is what's unpacked back
+// into real pdata attributes here.
+//
+// Grouping one span per ResourceSpans instead of batching spans that share
+// a resource is safe: every vendored filter either scans every
+// ResourceSpans unconditionally (hasSpanWithCondition) or treats "this
+// resource or any of its spans matches" independently per ResourceSpans
+// (hasResourceOrSpanWithCondition), so how spans are grouped into
+// ResourceSpans never changes the Decision.
+func rehydrateTraceData(t *trace.Trace) (ptrace.Traces, int64, uint64) {
+	td := ptrace.NewTraces()
+	for _, s := range t.Spans {
+		rs := td.ResourceSpans().AppendEmpty()
+		ss := rs.ScopeSpans().AppendEmpty()
+		span := ss.Spans().AppendEmpty()
+
+		span.SetTraceID(s.TraceID)
+		span.SetSpanID(s.SpanID)
+		span.SetParentSpanID(s.ParentSpanID)
+		span.SetName(s.Name)
+		span.SetKind(ptrace.SpanKind(s.Kind))
+		span.SetStartTimestamp(pcommon.NewTimestampFromTime(s.StartTime))
+		span.SetEndTimestamp(pcommon.NewTimestampFromTime(s.EndTime))
+		span.Status().SetCode(toPtraceStatusCode(s.StatusCode))
+		span.Status().SetMessage(s.StatusMessage)
+		span.TraceState().FromRaw(s.TraceStateRaw)
+
+		for k, v := range s.Attributes {
+			switch {
+			case strings.HasPrefix(k, "attributes."):
+				_ = span.Attributes().PutEmpty(strings.TrimPrefix(k, "attributes.")).FromRaw(v)
+			case strings.HasPrefix(k, "resource."):
+				_ = rs.Resource().Attributes().PutEmpty(strings.TrimPrefix(k, "resource.")).FromRaw(v)
+			}
+		}
+	}
+
+	marshaler := ptrace.ProtoMarshaler{}
+	return td, int64(len(t.Spans)), uint64(marshaler.TracesSize(td))
+}
+
+func toPtraceStatusCode(c trace.StatusCode) ptrace.StatusCode {
+	switch c {
+	case trace.StatusCodeOK:
+		return ptrace.StatusCodeOk
+	case trace.StatusCodeError:
+		return ptrace.StatusCodeError
 	default:
-		return 0, false
+		return ptrace.StatusCodeUnset
 	}
 }

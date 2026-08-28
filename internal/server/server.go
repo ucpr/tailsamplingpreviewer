@@ -117,7 +117,11 @@ func (s *Server) decideDue(now time.Time) {
 		return
 	}
 	for _, t := range due {
-		result := ev.Evaluate(&t, now)
+		result, err := ev.Evaluate(&t)
+		if err != nil {
+			s.logger.Error("evaluate trace", zap.String("trace_id", t.TraceID.String()), zap.Error(err))
+			continue
+		}
 		updated, ok := s.store.ApplyDecision(t.TraceID, result.Decision, result.MatchedNames())
 		if !ok {
 			continue
@@ -142,10 +146,13 @@ func (s *Server) SetPolicy(cfg sampling.Config) error {
 	s.evaluator = ev
 	s.mu.Unlock()
 
-	now := time.Now()
 	s.stats.Reset()
 	s.store.ForEachMutate(func(t *trace.Trace) {
-		result := ev.Evaluate(t, now)
+		result, err := ev.Evaluate(t)
+		if err != nil {
+			s.logger.Error("re-evaluate trace", zap.String("trace_id", t.TraceID.String()), zap.Error(err))
+			return
+		}
 		t.Decision = result.Decision
 		t.MatchedPolicies = result.MatchedNames()
 		if t.State == trace.StateDecided {
