@@ -3,6 +3,7 @@
 // the real backend (see vite.config.ts).
 import type {
   CollectorSummary,
+  CompareResult,
   PolicyView,
   SessionSummary,
   StatisticsView,
@@ -52,6 +53,15 @@ export async function putPolicy(policy: PolicyView): Promise<PolicyView> {
     body: JSON.stringify(policy),
   });
   return json<PolicyView>(res);
+}
+
+export async function comparePolicy(candidate: PolicyView): Promise<CompareResult> {
+  const res = await fetch("/api/policy/compare", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(candidate),
+  });
+  return json<CompareResult>(res);
 }
 
 export async function getPolicyYAML(): Promise<string> {

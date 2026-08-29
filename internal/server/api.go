@@ -43,6 +43,7 @@ func (s *Server) Router() *http.ServeMux {
 	mux.HandleFunc("PUT /api/policy", s.handlePutPolicy)
 	mux.HandleFunc("GET /api/policy/yaml", s.handleGetPolicyYAML)
 	mux.HandleFunc("PUT /api/policy/yaml", s.handlePutPolicyYAML)
+	mux.HandleFunc("POST /api/policy/compare", s.handleComparePolicy)
 
 	mux.HandleFunc("GET /api/traces", s.handleListTraces)
 	mux.HandleFunc("GET /api/traces/{id}", s.handleGetTrace)
@@ -122,6 +123,24 @@ func (s *Server) handlePutPolicyYAML(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, s.Policy())
+}
+
+// handleComparePolicy previews candidate against every currently-decided
+// trace without applying it (spec.md ss30 "Policy Compare") -- unlike
+// handlePutPolicy/handlePutPolicyYAML, it never calls SetPolicy, so the
+// active policy, store and statistics are all left untouched.
+func (s *Server) handleComparePolicy(w http.ResponseWriter, r *http.Request) {
+	var cfg sampling.Config
+	if err := json.NewDecoder(r.Body).Decode(&cfg); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	result, err := s.comparePolicy(cfg)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
 }
 
 func (s *Server) handleListTraces(w http.ResponseWriter, r *http.Request) {

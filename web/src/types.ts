@@ -60,6 +60,23 @@ export interface StatisticsView {
   policy_matches: Record<string, number>;
 }
 
+// Policy Compare (spec.md ss30): previews a candidate policy against every
+// currently-decided trace without applying it.
+export interface PolicySnapshot {
+  observed: number;
+  keep: number;
+  drop: number;
+  sampling_rate: number;
+}
+
+export interface CompareResult {
+  current: PolicySnapshot;
+  candidate: PolicySnapshot;
+  newly_kept: number;
+  newly_dropped: number;
+  error_traces_newly_dropped: number;
+}
+
 export type PolicyType =
   | "always_sample"
   | "latency"

@@ -1,9 +1,64 @@
 import { useEffect, useState } from "react";
-import { ApiError, putPolicy } from "../api";
+import { ApiError, comparePolicy, putPolicy } from "../api";
 import { useAppState } from "../state";
 import { fieldsForType, POLICY_TYPES, subFieldsForType, SUB_POLICY_TYPES } from "../policyDefaults";
+import { formatCount, formatPercent } from "../format";
 import { TypeFields } from "./TypeFields";
-import type { AndSubPolicyCfg, PolicyCfg, PolicyType, PolicyView } from "../types";
+import type { AndSubPolicyCfg, CompareResult, PolicyCfg, PolicyType, PolicyView } from "../types";
+
+interface PolicyCompareResultProps {
+  result: CompareResult;
+}
+
+// Renders the spec.md ss30 "Policy Compare" mockup: a Current/Candidate
+// snapshot table plus the three delta numbers.
+function PolicyCompareResult({ result }: PolicyCompareResultProps) {
+  return (
+    <div className="policy-compare-result">
+      <table className="policy-compare-table">
+        <thead>
+          <tr>
+            <th />
+            <th>Current</th>
+            <th>Candidate</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Sampling</td>
+            <td>{formatPercent(result.current.sampling_rate)}</td>
+            <td>{formatPercent(result.candidate.sampling_rate)}</td>
+          </tr>
+          <tr>
+            <td>KEEP</td>
+            <td className="text-keep">{formatCount(result.current.keep)}</td>
+            <td className="text-keep">{formatCount(result.candidate.keep)}</td>
+          </tr>
+          <tr>
+            <td>DROP</td>
+            <td className="text-drop">{formatCount(result.current.drop)}</td>
+            <td className="text-drop">{formatCount(result.candidate.drop)}</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <dl className="stat-grid">
+        <div>
+          <dt>Newly Kept</dt>
+          <dd className="text-keep">+{formatCount(result.newly_kept)}</dd>
+        </div>
+        <div>
+          <dt>Newly Dropped</dt>
+          <dd className="text-drop">{formatCount(result.newly_dropped)}</dd>
+        </div>
+        <div>
+          <dt>ERROR traces newly dropped</dt>
+          <dd className="text-drop">{formatCount(result.error_traces_newly_dropped)}</dd>
+        </div>
+      </dl>
+    </div>
+  );
+}
 
 interface AndSubPolicyListProps {
   subPolicies: AndSubPolicyCfg[];
@@ -108,6 +163,9 @@ export function PolicyBuilder() {
   const [dirty, setDirty] = useState(false);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
+  const [comparing, setComparing] = useState(false);
+  const [compareError, setCompareError] = useState<string | null>(null);
+  const [compareResult, setCompareResult] = useState<CompareResult | null>(null);
 
   useEffect(() => {
     if (!dirty && state.policy) setDraft(state.policy);
@@ -135,6 +193,10 @@ export function PolicyBuilder() {
   const mutate = (fn: (d: PolicyView) => PolicyView) => {
     setDraft((d) => (d ? fn(d) : d));
     setDirty(true);
+    // A stale comparison next to a policy that no longer matches it would
+    // be misleading, so any further edit invalidates it.
+    setCompareResult(null);
+    setCompareError(null);
   };
 
   const updatePolicy = (index: number, patch: Partial<PolicyCfg>) =>
@@ -167,6 +229,8 @@ export function PolicyBuilder() {
       setPolicy(saved);
       setDraft(saved);
       setDirty(false);
+      setCompareResult(null);
+      setCompareError(null);
     } catch (err) {
       setSaveError(err instanceof ApiError ? err.message : "Save failed");
     } finally {
@@ -178,6 +242,20 @@ export function PolicyBuilder() {
     if (state.policy) setDraft(state.policy);
     setDirty(false);
     setSaveError(null);
+    setCompareResult(null);
+    setCompareError(null);
+  };
+
+  const handleCompare = async () => {
+    setComparing(true);
+    setCompareError(null);
+    try {
+      setCompareResult(await comparePolicy(draft));
+    } catch (err) {
+      setCompareError(err instanceof ApiError ? err.message : "Compare failed");
+    } finally {
+      setComparing(false);
+    }
   };
 
   return (
@@ -214,6 +292,7 @@ export function PolicyBuilder() {
       </button>
 
       {saveError && <p className="notice notice--error">{saveError}</p>}
+      {compareError && <p className="notice notice--error">{compareError}</p>}
 
       <div className="button-row">
         <button type="button" onClick={handleSave} disabled={saving || !dirty}>
@@ -222,7 +301,12 @@ export function PolicyBuilder() {
         <button type="button" onClick={handleDiscard} disabled={saving || !dirty}>
           Discard changes
         </button>
+        <button type="button" onClick={handleCompare} disabled={saving || comparing || !dirty}>
+          {comparing ? "Comparing…" : "Compare with current"}
+        </button>
       </div>
+
+      {compareResult && <PolicyCompareResult result={compareResult} />}
     </section>
   );
 }

@@ -771,6 +771,25 @@
   color: var(--live);
 }
 
+.policy-compare-result {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+
+.policy-compare-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.policy-compare-table th,
+.policy-compare-table td {
+  text-align: left;
+  padding: 4px 6px;
+  font-size: 12px;
+  border-bottom: 1px solid var(--border);
+}
+
 /* YAML panel */
 
 .yaml-export {

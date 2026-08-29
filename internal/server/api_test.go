@@ -213,6 +213,65 @@ func TestAPI_PutPolicyYAML(t *testing.T) {
 	}
 }
 
+// TestAPI_ComparePolicy asserts the endpoint returns a well-formed
+// CompareResult and, critically, never mutates the active policy or
+// statistics -- unlike PUT /api/policy(/yaml), which this endpoint
+// otherwise resembles.
+func TestAPI_ComparePolicy(t *testing.T) {
+	tests := []struct {
+		name       string
+		body       string
+		wantStatus int
+	}{
+		{
+			name:       "valid candidate",
+			body:       `{"decision_wait":"5s","policies":[{"name":"all","type":"always_sample"}]}`,
+			wantStatus: http.StatusOK,
+		},
+		{
+			name:       "malformed json",
+			body:       `{not json`,
+			wantStatus: http.StatusBadRequest,
+		},
+		{
+			name:       "invalid candidate config",
+			body:       `{"decision_wait":"5s","policies":[{"name":"bad","type":"nonsense"}]}`,
+			wantStatus: http.StatusBadRequest,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			srv := newTestServer(t)
+			srv.store.Ingest(time.Now(), map[pcommon.TraceID][]itrace.Span{
+				{1}: {{Name: "handle", ServiceName: "payment", StatusCode: itrace.StatusCodeError}},
+			})
+			srv.decideDue(time.Now().Add(time.Hour))
+			policyBefore := srv.Policy()
+			statsBefore := srv.stats.Snapshot()
+
+			rec := doRequest(srv, http.MethodPost, "/api/policy/compare", tt.body)
+			if rec.Code != tt.wantStatus {
+				t.Fatalf("status = %d, want %d (body: %s)", rec.Code, tt.wantStatus, rec.Body.String())
+			}
+			if tt.wantStatus == http.StatusOK {
+				var got CompareResult
+				mustUnmarshal(t, rec.Body.Bytes(), &got)
+				if got.Current.Observed != 1 || got.Candidate.Observed != 1 {
+					t.Fatalf("unexpected compare result: %+v", got)
+				}
+			}
+
+			if got := srv.Policy(); got.DecisionWait != policyBefore.DecisionWait || len(got.Policies) != len(policyBefore.Policies) {
+				t.Fatalf("active policy changed after compare: before=%+v after=%+v", policyBefore, got)
+			}
+			if got := srv.stats.Snapshot(); got.Observed != statsBefore.Observed || got.Keep != statsBefore.Keep || got.Drop != statsBefore.Drop {
+				t.Fatalf("statistics changed after compare: before=%+v after=%+v", statsBefore, got)
+			}
+		})
+	}
+}
+
 func TestAPI_GetTrace(t *testing.T) {
 	knownID := pcommon.TraceID{0xAB, 0xCD}
 
