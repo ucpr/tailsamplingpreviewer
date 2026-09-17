@@ -1,36 +1,34 @@
-# OpenTelemetry Tail Sampling Preview 設計書 v2
+# OpenTelemetry Tail Sampling Preview Design Document v2
 
-## 1. 概要
+## 1. Overview
 
-OpenTelemetry Collector の Tail Sampling Policy を、本番適用前に実トラフィックを利用してリアルタイムに検証するためのツールを開発する。
+This project builds a tool for validating OpenTelemetry Collector Tail Sampling Policies in real time against real traffic, before applying them to production.
 
-Collector に専用の `tailpreviewexporter` を導入し、Preview Server と WebSocket の常時接続を確立する。
+A dedicated `tailpreviewexporter` is added to the Collector, which maintains a persistent WebSocket connection to the Preview Server.
 
-Collector が受信した Trace は Production Backend への通常送信と並行して Preview Server に Shadow Traffic として送信する。
+Traces received by the Collector are sent to the Preview Server as Shadow Traffic, in parallel with the normal send path to the Production Backend.
 
-Preview Server では Trace を再構成し、Tail Sampling Policy を適用した場合の、
+The Preview Server reassembles the traces and, for the case where a Tail Sampling Policy is applied, exposes:
 
 * KEEP / DROP
-* マッチした Policy
+* Matched Policy
 * Sampling Rate
-* Policy ごとの Match Rate
-* Policy 変更前後の差分
+* Per-policy Match Rate
+* Diff between the policy before and after a change
 
-を Datadog Live Tail に近い UI でリアルタイムに確認できるようにする。
+in real time, through a UI close to Datadog Live Tail.
 
-最終的には、
+The end goal is to provide an experience like
 
-> Tail Sampling Policy に対する Terraform `plan`
-
-のような体験を提供する。
+> Terraform `plan` for Tail Sampling Policies
 
 ---
 
-# 2. コンセプト
+# 2. Concept
 
-本ツールは Trace Backend ではない。
+This tool is not a Trace Backend.
 
-中心となる体験は以下である。
+The core experience is the following.
 
 ```text
 Observe real traces
@@ -46,54 +44,52 @@ Measure impact
 Export Collector config
 ```
 
-そのため、
-
-**OpenTelemetry Trace Viewer**
-
-ではなく、
+For that reason it is designed as a
 
 **Tail Sampling Policy Debugger / Playground**
 
-として設計する。
+rather than an
+
+**OpenTelemetry Trace Viewer**
 
 ---
 
-# 3. ゴール
+# 3. Goals
 
 ## MVP
 
-以下を実現する。
+The MVP realizes the following.
 
-* Collector の Trace を Preview Server に Shadow Traffic として送信できる
-* Collector と Preview Server は WebSocket で常時接続する
-* Preview Server が停止しても Production Pipeline に影響しない
-* Trace をリアルタイムに Live Tail 表示できる
-* Trace ID 単位で Span を再構成できる
-* Tail Sampling Policy を設定できる
-* KEEP / DROP をリアルタイムに Preview できる
-* Trace がどの Policy にマッチしたか確認できる
-* Sampling Rate をリアルタイム表示できる
-* OpenTelemetry Collector の `tail_sampling` YAML を import / export できる
-* Preview Session を開始・停止できる
+* Collector traces can be sent to the Preview Server as Shadow Traffic
+* The Collector and the Preview Server maintain a persistent WebSocket connection
+* The Production Pipeline is unaffected even if the Preview Server stops
+* Traces can be displayed in a real-time Live Tail
+* Spans can be reassembled per Trace ID
+* Tail Sampling Policies can be configured
+* KEEP / DROP can be previewed in real time
+* It is possible to see which policy a trace matched
+* The Sampling Rate is displayed in real time
+* OpenTelemetry Collector `tail_sampling` YAML can be imported / exported
+* A Preview Session can be started and stopped
 
 ---
 
 # 4. Non-Goals
 
-MVP では以下を対象外とする。
+The following are out of scope for the MVP.
 
-* Trace Backend の代替
-* Trace の長期保存
+* Replacing a Trace Backend
+* Long-term trace storage
 * Metrics / Logs Preview
-* Production Tail Sampling Processor の置換
-* Production Collector configuration の自動更新
-* Sampling Policy の自動生成
-* 分散 Preview Server
+* Replacing the production Tail Sampling Processor
+* Automatically updating the production Collector configuration
+* Automatic generation of Sampling Policies
+* A distributed Preview Server
 * Cost Prediction
 
 ---
 
-# 5. 全体アーキテクチャ
+# 5. Overall Architecture
 
 ```text
                         Production Data Plane
@@ -138,13 +134,13 @@ MVP では以下を対象外とする。
               └─────────────────┘
 ```
 
-Collector ↔ Preview Server と Preview Server ↔ Browser は別 connection とする。
+Collector ↔ Preview Server and Preview Server ↔ Browser are separate connections.
 
 ---
 
 # 6. Protocol Architecture
 
-通信は Data Plane と Control Plane に分離する。
+Communication is split into a Data Plane and a Control Plane.
 
 ```text
 Collector
@@ -166,15 +162,15 @@ Collector
 Preview Server
 ```
 
-同じ WebSocket connection を利用してもよいが、Frame Type を明確に分離する。
+The same WebSocket connection may be used for both, but the frame types must be clearly separated.
 
 ---
 
 # 7. Collector → Preview Server Data Plane
 
-Trace data は OTLP のデータモデルをそのまま利用する。
+Trace data uses the OTLP data model as-is.
 
-独自の Trace JSON format は作成しない。
+No proprietary trace JSON format is introduced.
 
 WebSocket Binary Frame:
 
@@ -187,7 +183,7 @@ WebSocket Binary Frame:
 +-------------------------------+
 ```
 
-論理 payload:
+Logical payload:
 
 ```protobuf
 ExportTraceServiceRequest {
@@ -195,7 +191,7 @@ ExportTraceServiceRequest {
 }
 ```
 
-これにより、
+This keeps the conversion as simple as:
 
 ```text
 Collector pdata
@@ -207,19 +203,17 @@ WebSocket
 Preview Server pdata
 ```
 
-という単純な変換で済む。
-
 ---
 
 # 8. Control Plane
 
-WebSocket の双方向性を利用し、Preview Server から Exporter を制御できるようにする。
+Taking advantage of the bidirectional nature of WebSocket, the Preview Server can control the exporter.
 
-ただし Sampling Policy の評価自体は Preview Server で行う。
+However, evaluation of Sampling Policies themselves happens on the Preview Server.
 
-Exporter は Data Transport に専念する。
+The exporter is dedicated to data transport.
 
-Control Message 例:
+Example control messages:
 
 ```json
 {
@@ -251,9 +245,9 @@ Control Message 例:
 
 # 9. Preview Session
 
-WebSocket を採用する主要な理由の1つとして Session の概念を導入する。
+One of the main reasons for adopting WebSocket is to introduce the concept of a Session.
 
-状態:
+States:
 
 ```text
 DISCONNECTED
@@ -344,9 +338,9 @@ service:
 
 # 11. tailpreviewexporter
 
-Exporter は可能な限り薄くする。
+The exporter is kept as thin as possible.
 
-責務:
+Responsibilities:
 
 ```text
 pdata.Traces
@@ -358,7 +352,7 @@ bounded queue
 WebSocket writer
 ```
 
-実施しないもの:
+What it does not do:
 
 * Trace Assembly
 * Tail Sampling Evaluation
@@ -367,7 +361,7 @@ WebSocket writer
 * Query
 * Storage
 
-これらは Preview Server に集約する。
+These are all concentrated in the Preview Server.
 
 ---
 
@@ -394,7 +388,7 @@ WebSocket writer
                      WebSocket
 ```
 
-WebSocket に対する write は単一 goroutine に集約する。
+Writes to the WebSocket are funneled through a single goroutine.
 
 ```go
 type Exporter struct {
@@ -421,8 +415,8 @@ func (e *Exporter) consumeTraces(
     default:
         e.metrics.Dropped.Add(1)
 
-        // Preview は best effort。
-        // Production pipeline へ backpressure を返さない。
+        // Preview is best effort.
+        // Never apply backpressure to the production pipeline.
         return nil
     }
 }
@@ -432,7 +426,7 @@ func (e *Exporter) consumeTraces(
 
 # 13. Backpressure Policy
 
-本ツールで最も重要な設計原則とする。
+This is the single most important design principle of the tool.
 
 ```text
 Preview overloaded
@@ -445,7 +439,7 @@ NOT
 Production blocked
 ```
 
-以下の場合は Preview data を drop する。
+Preview data is dropped in the following cases.
 
 * Queue full
 * Preview Server unreachable
@@ -453,15 +447,15 @@ Production blocked
 * Serialization backlog
 * Preview Session paused
 
-Production Pipeline にはエラーを返さない。
+No error is ever returned to the production pipeline.
 
 ---
 
 # 14. Connection Manager
 
-Exporter 内に WebSocket Connection Manager を持つ。
+The exporter contains a WebSocket Connection Manager.
 
-責務:
+Responsibilities:
 
 * connect
 * reconnect
@@ -486,7 +480,7 @@ ConnectionManager
 
 # 15. Reconnect
 
-Preview Server が再起動しても Collector 自体は正常稼働し続ける。
+Even if the Preview Server restarts, the Collector itself keeps running normally.
 
 ```text
 Preview Server DOWN
@@ -514,7 +508,7 @@ CONNECTING
 CONNECTED
 ```
 
-Reconnect 中に Trace を永続化しない。
+Traces are never persisted while reconnecting.
 
 ---
 
@@ -538,13 +532,13 @@ Response:
 }
 ```
 
-Preview Server は Collector connection の health を UI に表示する。
+The Preview Server surfaces the health of each Collector connection in the UI.
 
 ---
 
 # 17. Collector Identity
 
-connection 確立時に Collector metadata を送信する。
+Collector metadata is sent when the connection is established.
 
 ```json
 {
@@ -575,9 +569,9 @@ Preview Server:
 
 ---
 
-# 18. 複数 Collector
+# 18. Multiple Collectors
 
-Preview Server は複数 Collector connection を受け入れる。
+The Preview Server accepts connections from multiple Collectors.
 
 ```text
 Collector A ──┐
@@ -597,7 +591,7 @@ Collectors
 ● gateway-03
 ```
 
-ただし Tail Sampling の正確性については、
+However, for Tail Sampling correctness it must be guaranteed that
 
 ```text
 same trace_id
@@ -605,15 +599,13 @@ same trace_id
 same Preview Server
 ```
 
-を保証する必要がある。
-
-MVP では Preview Server を single instance とすることで解決する。
+In the MVP this is solved by keeping the Preview Server a single instance.
 
 ---
 
 # 19. Preview Server
 
-Preview Server は本システムの中心となる。
+The Preview Server is the heart of the system.
 
 ```text
 WebSocket Ingest
@@ -645,7 +637,7 @@ Browser Stream
 
 # 20. Trace Assembler
 
-Span を Trace ID 単位に集約する。
+Spans are aggregated per Trace ID.
 
 ```go
 type TraceState struct {
@@ -675,7 +667,7 @@ EXPIRED
 
 # 21. Decision Timing
 
-Distributed Trace に明示的な完了通知はないため、Tail Sampling Processor と同様に time based で decision を行う。
+Because a distributed trace has no explicit completion signal, decisions are made on a time basis, the same way the Tail Sampling Processor does.
 
 ```text
 first span
@@ -689,7 +681,7 @@ first span
                  evaluate
 ```
 
-初期値:
+Initial value:
 
 ```yaml
 decision_wait: 30s
@@ -697,9 +689,9 @@ decision_wait: 30s
 
 ---
 
-# 22. Live と Decision を分離する
+# 22. Separating Live from Decision
 
-UI 上では Trace の状態を区別する。
+The UI distinguishes the state of each trace.
 
 ```text
 ● LIVE
@@ -707,7 +699,7 @@ UI 上では Trace の状態を区別する。
 × DROP
 ```
 
-例:
+Example:
 
 ```text
 LIVE  payment-api  1.3s  8 spans
@@ -717,19 +709,17 @@ KEEP  auth-api     2.3s  ERROR
 DROP  catalog      82ms   OK
 ```
 
-まだ decision_wait が終了していない Trace について KEEP/DROP を断定しない。
+For traces whose decision_wait has not yet elapsed, KEEP/DROP is never asserted.
 
 ---
 
 # 23. Policy Engine
 
-Preview Server 内で Tail Sampling Policy を評価する。
+Tail Sampling Policies are evaluated inside the Preview Server.
 
-重要なのは、
+The important point is that
 
-**Collector Exporter では Policy を評価しない**
-
-ことである。
+**the Collector exporter never evaluates policies**
 
 ```text
 Collector
@@ -743,13 +733,13 @@ Preview Server
      └── Policy C
 ```
 
-これにより同一 Trace Set を複数 Policy で何度でも再評価できる。
+This allows the same trace set to be re-evaluated any number of times against multiple policies.
 
 ---
 
 # 24. Policy Update
 
-ユーザーが UI から Policy を変更する。
+The user changes a policy from the UI.
 
 ```text
 Policy A
@@ -767,9 +757,9 @@ OR
 duration > 1000ms
 ```
 
-Collector への configuration change は発生しない。
+No configuration change occurs on the Collector.
 
-Preview Server 内で保持している Trace を即座に再評価する。
+The traces retained inside the Preview Server are re-evaluated immediately.
 
 ```text
 Policy changed
@@ -781,7 +771,7 @@ re-evaluate ring buffer
 new statistics
 ```
 
-これを本ツールの重要な UX とする。
+This is the key UX of the tool.
 
 ---
 
@@ -805,7 +795,7 @@ KEEP IF
 [ payment ]
 ```
 
-右下で常に結果を表示する。
+The results are always shown in the lower right.
 
 ```text
 Sampling Rate
@@ -823,7 +813,7 @@ DROP
 
 # 26. Live Tail
 
-基本表示単位は Trace とする。
+The basic unit of display is the trace.
 
 ```text
 18:41:31  KEEP  payment-api   2.3s   ERROR  18 spans
@@ -831,13 +821,13 @@ DROP
 18:41:30  KEEP  auth          1.8s   ERROR   8 spans
 ```
 
-Datadog Live Tail に近い操作感を目指す。
+The goal is a feel close to Datadog Live Tail.
 
 ---
 
 # 27. Live Tail Query
 
-Sampling Policy とは別に UI Filter を持つ。
+Separate from the Sampling Policy, the UI has its own filter.
 
 ```text
 service.name:payment
@@ -851,15 +841,15 @@ status:error duration:>1s
 resource.deployment.environment:production
 ```
 
-Filter はあくまで表示対象を制御する。
+The filter only controls what is displayed.
 
-Sampling Decision には影響しない。
+It has no effect on the sampling decision.
 
 ---
 
 # 28. Trace Detail
 
-Trace 選択時:
+When a trace is selected:
 
 ```text
 Trace
@@ -900,7 +890,7 @@ api
 
 # 29. Statistics
 
-表示する主要 Metrics:
+Key metrics to display:
 
 ```text
 Observed traces       1,024,821
@@ -926,7 +916,7 @@ baseline            18,231
 
 # 30. Policy Compare
 
-将来的に同じ Trace Set を複数 candidate に対して評価できるようにする。
+In the future, the same trace set should be evaluable against multiple candidates.
 
 ```text
               Current      Candidate
@@ -938,7 +928,7 @@ KEEP          42,100        68,200
 DROP         957,900       931,800
 ```
 
-さらに、
+And further:
 
 ```text
 Newly Kept
@@ -951,13 +941,13 @@ ERROR traces newly dropped
 12
 ```
 
-まで表示する。
+should be displayed as well.
 
 ---
 
 # 31. Storage
 
-MVP は In-Memory のみ。
+The MVP is in-memory only.
 
 ```text
 Ring Buffer
@@ -967,7 +957,7 @@ max duration
 max bytes
 ```
 
-設定:
+Configuration:
 
 ```yaml
 storage:
@@ -976,13 +966,13 @@ storage:
   max_memory: 512MiB
 ```
 
-最古の Trace から eviction する。
+Eviction starts from the oldest trace.
 
 ---
 
 # 32. Pause
 
-Preview Session を Pause した場合、新しい Trace を Collector から送らない。
+When a Preview Session is paused, the Collector stops sending new traces.
 
 ```text
 UI
@@ -1008,15 +998,15 @@ ConsumeTraces
      └── DROP
 ```
 
-Queue に溜めない。
+Nothing accumulates in the queue.
 
-これにより大量 Trace の buffering を防ぐ。
+This prevents buffering huge numbers of traces.
 
 ---
 
 # 33. Browser Communication
 
-Preview Server → Browser も WebSocket を利用する。
+Preview Server → Browser also uses WebSocket.
 
 ```text
 Preview Server
@@ -1026,7 +1016,7 @@ Preview Server
 Browser
 ```
 
-イベント例:
+Example events:
 
 ```json
 {
@@ -1050,9 +1040,9 @@ Browser
 }
 ```
 
-Browser へ OTLP protobuf をそのまま送る必要はない。
+There is no need to send OTLP protobuf to the browser as-is.
 
-UI に必要な projection のみ送信する。
+Only the projection the UI needs is sent.
 
 ---
 
@@ -1072,20 +1062,18 @@ server:
   ui_endpoint: 127.0.0.1:17778
 ```
 
-Remote mode を追加する場合は、
+If a remote mode is added, the following become mandatory:
 
 * TLS
 * authentication
 * origin validation
 * connection authorization
 
-を必須とする。
-
 ---
 
 # 35. Sensitive Data
 
-Trace に含まれる可能性:
+Traces may contain:
 
 * Authorization Header
 * User ID
@@ -1102,7 +1090,7 @@ Persistence OFF
 Remote access OFF
 ```
 
-将来的には Collector 側で Preview 専用 transform/redaction processor を挟める。
+In the future, a preview-only transform/redaction processor can be inserted on the Collector side.
 
 ```text
 receiver
@@ -1214,7 +1202,7 @@ tailpreview/
 
 # 38. CLI UX
 
-起動:
+Startup:
 
 ```bash
 $ tailpreview
@@ -1244,7 +1232,7 @@ Open:
 http://127.0.0.1:17778
 ```
 
-UI で Start:
+After Start in the UI:
 
 ```text
 Preview started.
@@ -1258,11 +1246,11 @@ Trace rate     2,183/s
 
 ---
 
-# 39. MVP 開発順
+# 39. MVP Development Order
 
 ## Phase 0: WebSocket Transport
 
-まず Collector → Preview Server の transport のみ検証する。
+First, validate only the Collector → Preview Server transport.
 
 ```text
 Collector
@@ -1272,7 +1260,7 @@ Collector
 Preview Server
 ```
 
-実装:
+Implementation:
 
 * custom exporter
 * WebSocket connect
@@ -1281,13 +1269,13 @@ Preview Server
 * reconnect
 * counter
 
-UI は不要。
+No UI required.
 
 ---
 
 ## Phase 1: Live Tail
 
-追加:
+Adds:
 
 * Trace Assembler
 * Ring Buffer
@@ -1302,13 +1290,13 @@ Preview
 Browser
 ```
 
-ここで Live Tail として成立させる。
+This is where it becomes a working Live Tail.
 
 ---
 
 ## Phase 2: Sampling Preview
 
-追加:
+Adds:
 
 * Tail Sampling Evaluator
 * KEEP / DROP
@@ -1316,13 +1304,13 @@ Browser
 * Sampling Rate
 * YAML import
 
-これが最初のプロダクト MVP。
+This is the first product MVP.
 
 ---
 
 ## Phase 3: Policy Builder
 
-追加:
+Adds:
 
 * Visual Policy Builder
 * YAML export
@@ -1333,7 +1321,7 @@ Browser
 
 ## Phase 4: Policy Compare
 
-追加:
+Adds:
 
 ```text
 Current
@@ -1350,41 +1338,41 @@ Candidate
 
 # 40. MVP Completion Criteria
 
-* [ ] `tailpreviewexporter` が WebSocket connection を確立できる
-* [ ] OTLP Trace を protobuf binary frame として送信できる
-* [ ] Preview Server 再起動後に reconnect できる
-* [ ] Preview Server 停止中も Production Pipeline が正常動作する
-* [ ] Queue overflow 時に Preview data のみ drop される
-* [ ] Preview Session を Start / Pause / Stop できる
-* [ ] Live Tail UI で Trace を表示できる
-* [ ] Trace ID 単位に Span を aggregate できる
-* [ ] Tail Sampling Policy を読み込める
-* [ ] KEEP / DROP を Preview できる
-* [ ] Matched Policy を確認できる
-* [ ] Sampling Rate を確認できる
-* [ ] Policy 変更時に既存 Ring Buffer を再評価できる
-* [ ] Production Collector の設定を Preview Server から変更しない
-* [ ] Trace を永続化しない
+* [ ] `tailpreviewexporter` can establish a WebSocket connection
+* [ ] OTLP traces can be sent as protobuf binary frames
+* [ ] The exporter can reconnect after the Preview Server restarts
+* [ ] The production pipeline keeps working while the Preview Server is down
+* [ ] On queue overflow, only preview data is dropped
+* [ ] A Preview Session can be started / paused / stopped
+* [ ] Traces can be displayed in the Live Tail UI
+* [ ] Spans can be aggregated per Trace ID
+* [ ] Tail Sampling Policies can be loaded
+* [ ] KEEP / DROP can be previewed
+* [ ] Matched policies can be inspected
+* [ ] The Sampling Rate can be inspected
+* [ ] The existing ring buffer is re-evaluated when the policy changes
+* [ ] The Preview Server never changes the production Collector configuration
+* [ ] Traces are never persisted
 
 ---
 
-# 41. 設計原則
+# 41. Design Principles
 
 ## Production First
 
-Preview の障害・遅延・停止は Production Pipeline に伝播させない。
+Preview failures, latency, and outages must never propagate to the production pipeline.
 
 ---
 
 ## Best Effort
 
-Preview Trace は欠損してもよい。
+Preview traces may be lost.
 
-Collector を block するより data を drop する。
+Drop data rather than block the Collector.
 
 ---
 
-## Transport と Evaluation を分離する
+## Separate Transport from Evaluation
 
 ```text
 Exporter
@@ -1401,13 +1389,11 @@ storage
 UI
 ```
 
-とする。
-
 ---
 
 ## Full Shadow Stream
 
-Exporter 側で Sampling Policy による filtering をしない。
+The exporter never filters by Sampling Policy.
 
 ```text
 full trace stream
@@ -1417,23 +1403,23 @@ Preview Server
 arbitrary policy
 ```
 
-とすることで Policy を自由に変更・比較できる。
+This is what makes policies freely changeable and comparable.
 
 ---
 
 ## Native OTel Data Model
 
-Trace data に独自 schema を作らない。
+No proprietary schema is created for trace data.
 
-Collector → Server は OTLP protobuf を利用する。
+Collector → Server uses OTLP protobuf.
 
 ---
 
 ## Interactive Debugger
 
-WebSocket を採用する目的は単なる connection reuse ではない。
+WebSocket is not adopted merely for connection reuse.
 
-以下の UX を提供するために利用する。
+It is adopted to provide the following UX:
 
 ```text
 connection
@@ -1446,7 +1432,7 @@ control messages
 
 ---
 
-# 42. 最終イメージ
+# 42. Final Picture
 
 ```text
                         OpenTelemetry Collector
@@ -1497,10 +1483,8 @@ Receiver
         └──────────────────────────────────────┘
 ```
 
-この構成では `tailpreviewexporter` は telemetry pipeline と Preview 環境の境界としてのみ振る舞い、Sampling のロジックはすべて Preview Server に閉じ込める。
+In this configuration, `tailpreviewexporter` acts only as the boundary between the telemetry pipeline and the preview environment, and all sampling logic stays inside the Preview Server.
 
-これにより、実トラフィックを安全に Shadow しながら、
+This safely shadows real traffic while providing an interactive validation environment dedicated to Tail Sampling:
 
-**Policy を変更 → 即座に再評価 → KEEP/DROP と影響を見る**
-
-という Tail Sampling 専用のインタラクティブな検証環境を実現する。
+**change a policy → re-evaluate instantly → see KEEP/DROP and its impact**
