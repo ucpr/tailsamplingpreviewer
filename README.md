@@ -1,6 +1,8 @@
 ## tailsamplingpreviewer🧪
 
-Tail sampling policies are hard to get right: you only find out what a policy really drops after it is live in production. This tool mirrors real Collector traffic to a local preview server over WebSocket and shows, in real time, which traces a `tail_sampling` policy would KEEP or DROP — a `terraform plan` for tail sampling.
+Tail sampling policies are hard to get right. You often don’t know what a policy will actually drop until it’s running in production.
+
+This tool mirrors real Collector traffic to a local preview server over WebSocket, letting you see in real time which traces a `tail_sampling` policy would KEEP or DROP—before deploying the policy to production.
 
 > [!WARNING]
 > This is a PoC. Interfaces, config and the wire protocol may change without notice.
